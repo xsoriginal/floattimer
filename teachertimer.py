@@ -8,7 +8,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QPoint, QSize, Signal, QPropertyAnimation, QEasingCurve, QEvent
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPainter, QPixmap, QPen, QBrush, QFontMetrics, QPainterPath, QLinearGradient
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPainter, QPixmap, QPen, QBrush, QFontMetrics, QPainterPath, QLinearGradient, QCursor
 from PySide6.QtWidgets import (
     QApplication, QWidget, QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QPushButton, QLabel, QLineEdit, QSpinBox, QDoubleSpinBox, QCheckBox,
@@ -216,13 +216,20 @@ class IconButton(QPushButton):
             painter.drawLine(QPointF(tip.x(), tip.y() - 6.5), tip)
             painter.drawLine(tip, QPointF(tip.x() + 6.5, tip.y()))
         elif k in ("fullscreen", "exit_fullscreen"):
-            # Four clean square corners; exit points the brackets inward.
-            d = 9 if k == "fullscreen" else 5
-            edge = 15
+            # Four diagonal arrows, outwards to enter Full and inwards to exit.
+            from PySide6.QtCore import QPointF
             for sx in (-1, 1):
                 for sy in (-1, 1):
-                    painter.drawLine(sx * d, sy * edge, sx * edge, sy * edge)
-                    painter.drawLine(sx * edge, sy * d, sx * edge, sy * edge)
+                    if k == "fullscreen":
+                        start, tip = QPointF(sx * 5, sy * 5), QPointF(sx * 15, sy * 15)
+                        painter.drawLine(start, tip)
+                        painter.drawLine(QPointF(sx * 8, sy * 15), tip)
+                        painter.drawLine(QPointF(sx * 15, sy * 8), tip)
+                    else:
+                        start, tip = QPointF(sx * 15, sy * 15), QPointF(sx * 5, sy * 5)
+                        painter.drawLine(start, tip)
+                        painter.drawLine(QPointF(sx * 12, sy * 5), tip)
+                        painter.drawLine(QPointF(sx * 5, sy * 12), tip)
         elif k == "textbox":
             from PySide6.QtCore import QRectF
             painter.drawRoundedRect(QRectF(-14, -11, 28, 22), 2, 2)
@@ -532,10 +539,10 @@ class PresentationWindow(QWidget):
         top = QHBoxLayout()
         top.setContentsMargins(30, 10, 30, 0)
         top.addStretch()
-        self.instructions_toggle = IconButton('textbox', self.toggle_instructions, 'topButton', 48)
+        self.instructions_toggle = IconButton('textbox', self.toggle_instructions, 'topButton', 32)
         self.instructions_toggle.setToolTip('Show or hide student instructions')
         top.addWidget(self.instructions_toggle)
-        self.exit_button = IconButton('exit_fullscreen', timer.exit_presentation, 'topButton', 48)
+        self.exit_button = IconButton('exit_fullscreen', timer.exit_presentation, 'topButton', 32)
         self.exit_button.setToolTip('Exit fullscreen (Esc or F11)')
         top.addWidget(self.exit_button)
         layout.addLayout(top)
@@ -624,6 +631,15 @@ class PresentationWindow(QWidget):
         layout.addLayout(bottom)
         self.apply_theme()
         QApplication.instance().installEventFilter(self)
+
+    def update_button_visibility(self):
+        cursor = QCursor.pos()
+        hovered = self.isVisible() and self.rect().contains(self.mapFromGlobal(cursor))
+        controls = [self.instructions_toggle, self.exit_button, self.minus_button,
+                    self.play_button, self.reset_button, self.plus_button]
+        controls.extend(self.preset_buttons)
+        controls.extend([self.text_smaller, self.text_larger, self.text_clear])
+        set_hover_controls(self, controls, hovered)
 
     def update_content_widths(self):
         """Reserve the right quarter without allowing the clock to enlarge the window."""
@@ -802,6 +818,19 @@ class PresentationWindow(QWidget):
             event.accept()
 
 
+def set_hover_controls(window, controls, show):
+    """Keep button geometry reserved while hiding their artwork and hit targets."""
+    for control in controls:
+        if control is None:
+            continue
+        effect = control.graphicsEffect()
+        if not isinstance(effect, QGraphicsOpacityEffect):
+            effect = QGraphicsOpacityEffect(control)
+            control.setGraphicsEffect(effect)
+        effect.setOpacity(1.0 if show else 0.0)
+        control.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not show)
+
+
 class TeacherTimer(QWidget):
     def __init__(self):
         super().__init__()
@@ -832,8 +861,10 @@ class TeacherTimer(QWidget):
         self.clock = QTimer(self)
         self.clock.setInterval(80)
         self.clock.timeout.connect(self.tick)
+        self.clock.timeout.connect(self.update_button_visibility)
         self.clock.start()
         self.refresh()
+        self.update_button_visibility()
 
     def build_ui(self):
         root = QVBoxLayout(self)
@@ -906,10 +937,10 @@ class TeacherTimer(QWidget):
         controls.addStretch()
         left.addLayout(controls)
         main.addLayout(left, stretch=1)
-        self.preset_box = QVBoxLayout()
-        self.preset_box.setSpacing(4)
-        main.addLayout(self.preset_box)
         body.addLayout(main)
+        self.preset_box = QHBoxLayout()
+        self.preset_box.setSpacing(6)
+        body.addLayout(self.preset_box)
         # The complete interface is hidden in dock mode, leaving only a clickable time.
         self.dock_display = QPushButton("05:00")
         self.dock_display.setObjectName("dockDisplay")
@@ -944,11 +975,9 @@ class TeacherTimer(QWidget):
         # The controls must also fit at the baseline size, including their spacing.
         controls_width = 42 + 50 + 42 + 42 + 3 * 7 + 16
         left_width = max(clock_width, controls_width)
-        presets_width = 76
-        # outer margins 18, panel margins 28, column gap 10, plus spare padding.
-        width = left_width + presets_width + 18 + 28 + 10 + 12
-        height = max(190, 58 + len(self.settings["presets"]) * 47,
-                     clock_height + 50 + 32 + 28)
+        presets_width = len(self.settings["presets"]) * 60 + max(0, len(self.settings["presets"]) - 1) * 6
+        width = max(left_width, presets_width) + 18 + 28 + 24
+        height = max(190, clock_height + 50 + 43 + 32 + 32)
         if not self.docked:
             self.setFixedSize(width, height)
         # Dock mode has its own constant font size, independent of this setting.
@@ -1006,6 +1035,18 @@ class TeacherTimer(QWidget):
                 and (obj is self or self.isAncestorOf(obj))):
             self.clear_alert()
         return super().eventFilter(obj, event)
+
+    def update_button_visibility(self):
+        if self.docked:
+            return
+        cursor = QCursor.pos()
+        local = self.mapFromGlobal(cursor)
+        hovered = self.isVisible() and self.rect().contains(local)
+        controls = [self.dock_button, self.fullscreen_button, self.settings_button,
+                    self.minimize_button, self.close_button, self.minus_button,
+                    self.play_button, self.reset_button, self.plus_button]
+        controls.extend(b for _, b in getattr(self, 'preset_buttons', []))
+        set_hover_controls(self, controls, hovered)
 
     def clear_alert(self):
         if self.alert_active:
@@ -1073,12 +1114,12 @@ class TeacherTimer(QWidget):
             font.setPixelSize(20)
             font.setBold(True)
             b.setFont(font)
-            b.setMinimumWidth(76)
+            b.setMinimumWidth(0)
             b.setMinimumHeight(43)
-            self.preset_box.addWidget(b)
+            self.preset_box.addWidget(b, 1)
             self.preset_buttons.append((seconds, b))
-        self.preset_box.addStretch()
         self.refresh()
+        self.update_button_visibility()
 
     def select_preset(self, seconds):
         self.running = False
@@ -1241,6 +1282,7 @@ class TeacherTimer(QWidget):
         self.setWindowTitle(f"{label} · Teacher Timer")
         if self.presentation is not None:
             self.presentation.update_clock()
+            self.presentation.update_button_visibility()
 
     def open_settings(self):
         dialog = SettingsDialog(self.settings, self)
