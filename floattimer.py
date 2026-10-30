@@ -1,5 +1,6 @@
 """FloatTimer: compact, customisable, always-on-top countdown for Windows."""
 import json
+import ctypes
 import sys
 import time
 from pathlib import Path
@@ -662,6 +663,9 @@ class FloatTimer(QWidget):
 
 
 def main():
+    if sys.platform == "win32":
+        # Stable identity for Windows taskbar and notification-area preferences.
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("FloatTimer.Desktop.Timer")
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     timer = FloatTimer()
