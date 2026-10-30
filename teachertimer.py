@@ -1065,14 +1065,17 @@ class RedConfetti(QWidget):
             self.origin = None
         else:
             super().__init__(None)
-            screen = timer.screen() or QApplication.primaryScreen()
+            # Resolve the screen containing the timer, including multi-monitor setups.
+            timer_pos = timer.mapToGlobal(QPoint(timer.width() // 2, timer.height() // 2))
+            screen = QApplication.screenAt(timer_pos) or timer.screen() or QApplication.primaryScreen()
             screen_rect = screen.geometry()
             self.setGeometry(screen_rect)
             local = timer.mapToGlobal(QPoint(0, 0)) - screen_rect.topLeft()
             self.origin = (local.x(), local.y(), timer.width(), timer.height())
             self.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint |
                                 Qt.WindowType.WindowStaysOnTopHint |
-                                Qt.WindowType.WindowDoesNotAcceptFocus)
+                                Qt.WindowType.WindowDoesNotAcceptFocus |
+                                Qt.WindowType.WindowTransparentForInput)
             self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
@@ -1108,7 +1111,7 @@ class RedConfetti(QWidget):
         self.show()
         self.raise_()
         if mode == 'float':
-            # The main timer stays above the particles: they puff from behind it.
+            # Keep the timer itself above the puff without activating it.
             timer.raise_()
 
     def advance(self):
@@ -2003,12 +2006,19 @@ class TeacherTimer(QWidget):
             if self.settings["sound"]:
                 selected = self.settings.get("alert_sound", "Double Beep")
                 if selected == "Confetti Pop":
+                    previous_overlay = getattr(self, "confetti_overlay", None)
+                    if previous_overlay is not None:
+                        previous_overlay.close()
+                        previous_overlay.deleteLater()
+                    # Retain the overlay until its own timer completes. Without
+                    # a Python reference, the unparented desktop overlay can be
+                    # collected immediately after this function returns.
                     if self.presentation is not None:
-                        RedConfetti(self, 'full')
+                        self.confetti_overlay = RedConfetti(self, 'full')
                     elif self.docked:
-                        RedConfetti(self, 'top')
+                        self.confetti_overlay = RedConfetti(self, 'top')
                     else:
-                        RedConfetti(self, 'float')
+                        self.confetti_overlay = RedConfetti(self, 'float')
                     self.cork_effect.stop()
                     self.cork_effect.play()
                 else:
