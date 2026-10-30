@@ -6,14 +6,14 @@ import sys
 import time
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, QPoint, QSize, Signal, QPropertyAnimation, QEasingCurve, QEvent
+from PySide6.QtCore import Qt, QTimer, QPoint, QSize, QRectF, Signal, QPropertyAnimation, QEasingCurve, QEvent
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPainter, QPixmap, QPen, QBrush, QFontMetrics, QPainterPath, QLinearGradient, QCursor
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPainter, QPixmap, QPen, QBrush, QFontMetrics, QPainterPath, QLinearGradient
 from PySide6.QtWidgets import (
     QApplication, QWidget, QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QPushButton, QLabel, QLineEdit, QSpinBox, QDoubleSpinBox, QCheckBox,
     QColorDialog, QFontComboBox, QComboBox, QDialogButtonBox, QSystemTrayIcon, QMenu,
-    QMessageBox, QScrollArea, QFrame, QStackedWidget, QSizePolicy, QGraphicsOpacityEffect, QPlainTextEdit
+    QMessageBox, QScrollArea, QFrame, QStackedWidget, QSizePolicy, QPlainTextEdit
 )
 
 DEFAULT = {
@@ -115,7 +115,7 @@ STARTUP_REGISTRY_NAME = "Teacher Timer"
 def startup_command():
     """Use the stable, extracted EXE path; never a PyInstaller temp directory."""
     if getattr(sys, "frozen", False):
-        return f'"{Path(sys.executable).resolve()}"'
+        return f'"{Path(sys.executable).resolve()}" --startup-tray'
     return None
 
 
@@ -127,7 +127,7 @@ def is_windows_startup_enabled():
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
                             r"Software\Microsoft\Windows\CurrentVersion\Run") as key:
             value, _ = winreg.QueryValueEx(key, STARTUP_REGISTRY_NAME)
-            return value == startup_command()
+            return value in (startup_command(), startup_command().removesuffix(" --startup-tray")) if startup_command() else False
     except OSError:
         return False
 
@@ -527,7 +527,17 @@ class FixedSlotClock(QPushButton):
         # Don't let QPushButton centre a proportional text string as a whole.
         # Every character's centre is independent of its glyph's actual width.
         painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        if self.objectName() == 'dockDisplay':
+            owner = self.window()
+            bg = QColor('#e5404b' if getattr(owner, 'alert_active', False)
+                        else owner.settings['background_color'])
+            bg.setAlphaF(0.80)
+            path = QPainterPath()
+            rect = QRectF(self.rect())
+            path.addRoundedRect(rect, 12, 12)
+            painter.fillPath(path, bg)
         painter.setFont(self.font())
         painter.setPen(self.clock_colour)
         label = self.text()
@@ -669,15 +679,6 @@ class PresentationWindow(QWidget):
         layout.addLayout(bottom)
         self.apply_theme()
         QApplication.instance().installEventFilter(self)
-
-    def update_button_visibility(self):
-        cursor = QCursor.pos()
-        hovered = self.isVisible() and self.rect().contains(self.mapFromGlobal(cursor))
-        controls = [self.instructions_toggle, self.exit_button, self.minus_button,
-                    self.play_button, self.reset_button, self.plus_button]
-        controls.extend(self.preset_buttons)
-        controls.extend([self.text_smaller, self.text_larger, self.text_clear])
-        set_hover_controls(self, controls, hovered)
 
     def update_content_widths(self):
         """Reserve the right quarter without allowing the clock to enlarge the window."""
@@ -872,19 +873,6 @@ class PresentationWindow(QWidget):
             event.accept()
 
 
-def set_hover_controls(window, controls, show):
-    """Keep button geometry reserved while hiding their artwork and hit targets."""
-    for control in controls:
-        if control is None:
-            continue
-        effect = control.graphicsEffect()
-        if not isinstance(effect, QGraphicsOpacityEffect):
-            effect = QGraphicsOpacityEffect(control)
-            control.setGraphicsEffect(effect)
-        effect.setOpacity(1.0 if show else 0.0)
-        control.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not show)
-
-
 class TeacherTimer(QWidget):
     def __init__(self):
         super().__init__()
@@ -915,10 +903,8 @@ class TeacherTimer(QWidget):
         self.clock = QTimer(self)
         self.clock.setInterval(80)
         self.clock.timeout.connect(self.tick)
-        self.clock.timeout.connect(self.update_button_visibility)
         self.clock.start()
         self.refresh()
-        self.update_button_visibility()
 
     def build_ui(self):
         root = QVBoxLayout(self)
@@ -1090,18 +1076,6 @@ class TeacherTimer(QWidget):
             self.clear_alert()
         return super().eventFilter(obj, event)
 
-    def update_button_visibility(self):
-        if self.docked:
-            return
-        cursor = QCursor.pos()
-        local = self.mapFromGlobal(cursor)
-        hovered = self.isVisible() and self.rect().contains(local)
-        controls = [self.dock_button, self.fullscreen_button, self.settings_button,
-                    self.minimize_button, self.close_button, self.minus_button,
-                    self.play_button, self.reset_button, self.plus_button]
-        controls.extend(b for _, b in getattr(self, 'preset_buttons', []))
-        set_hover_controls(self, controls, hovered)
-
     def clear_alert(self):
         if self.alert_active:
             self.alert_active = False
@@ -1139,11 +1113,8 @@ class TeacherTimer(QWidget):
         dock_bg = QColor("#e5404b" if self.alert_active else s["background_color"])
         dock_bg.setAlphaF(0.80)
         dock_rgba = f"rgba({dock_bg.red()}, {dock_bg.green()}, {dock_bg.blue()}, {dock_bg.alpha()})"
-        self.dock_display.setStyleSheet(
-            f"QPushButton {{ background-color: {dock_rgba}; color: {foreground}; "
-            "border: none; border-bottom-left-radius: 12px; "
-            "border-bottom-right-radius: 12px; padding: 0px; }}"
-        )
+        self.dock_display.setStyleSheet('QPushButton { background: transparent; border: none; padding: 0px; }')
+        self.dock_display.update()
         for icon_button in (self.dock_button, self.play_button, self.reset_button,
                             self.minus_button, self.plus_button, self.settings_button,
                             self.minimize_button, self.close_button, self.fullscreen_button):
@@ -1175,7 +1146,6 @@ class TeacherTimer(QWidget):
             self.preset_box.addWidget(b, 1)
             self.preset_buttons.append((seconds, b))
         self.refresh()
-        self.update_button_visibility()
 
     def select_preset(self, seconds):
         self.running = False
@@ -1338,7 +1308,6 @@ class TeacherTimer(QWidget):
         self.setWindowTitle(f"{label} · Teacher Timer")
         if self.presentation is not None:
             self.presentation.update_clock()
-            self.presentation.update_button_visibility()
 
     def open_settings(self):
         dialog = SettingsDialog(self.settings, self)
@@ -1485,6 +1454,8 @@ def main():
             return True
         return False
 
+    startup_tray = "--startup-tray" in sys.argv[1:]
+
     if signal_existing():
         return
 
@@ -1502,6 +1473,17 @@ def main():
             return
 
     timer = TeacherTimer()
+    # Upgrade the pre-existing login entry to the silent-start argument.
+    if sys.platform == "win32" and is_windows_startup_enabled():
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                                r"Software\Microsoft\Windows\CurrentVersion\Run") as key:
+                saved_command, _ = winreg.QueryValueEx(key, STARTUP_REGISTRY_NAME)
+            if saved_command != startup_command():
+                set_windows_startup(True)
+        except OSError:
+            pass
     app.aboutToQuit.connect(clear_instructions_file)
 
     def accept_activation():
@@ -1516,7 +1498,8 @@ def main():
             socket.deleteLater()
 
     server.newConnection.connect(accept_activation)
-    timer.show()
+    if not startup_tray or not QSystemTrayIcon.isSystemTrayAvailable():
+        timer.show()
     sys.exit(app.exec())
 
 
