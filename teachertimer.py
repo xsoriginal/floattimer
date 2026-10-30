@@ -6,13 +6,14 @@ import sys
 import time
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, QPoint, Signal
+from PySide6.QtCore import Qt, QTimer, QPoint, Signal, QPropertyAnimation, QEasingCurve, QEvent
+from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPainter, QPixmap, QPen, QBrush, QFontMetrics, QPainterPath
 from PySide6.QtWidgets import (
     QApplication, QWidget, QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QPushButton, QLabel, QLineEdit, QSpinBox, QDoubleSpinBox, QCheckBox,
     QColorDialog, QFontComboBox, QDialogButtonBox, QSystemTrayIcon, QMenu,
-    QMessageBox, QScrollArea, QFrame, QStackedWidget, QSizePolicy
+    QMessageBox, QScrollArea, QFrame, QStackedWidget, QSizePolicy, QGraphicsOpacityEffect
 )
 
 DEFAULT = {
@@ -51,7 +52,7 @@ def load_settings():
             result.update({k: v for k, v in stored.items() if k in DEFAULT})
     except (OSError, ValueError, TypeError):
         pass
-    result["presets"] = [int(x) for x in result["presets"] if 0 < int(x) <= 999][:12] or [5]
+    result["presets"] = [int(x) for x in result["presets"] if 0 < int(x) <= 999][:5] or [5]
     return result
 
 
@@ -137,7 +138,8 @@ class IconButton(QPushButton):
         scale = min(self.width(), self.height()) / 42
         painter.scale(scale, scale)
         window = self.window()
-        color = QColor(getattr(window, "settings", {}).get("text_color", "#FFFFFF"))
+        color = QColor('#ffffff' if getattr(window, 'alert_active', False)
+                       else getattr(window, "settings", {}).get("text_color", "#FFFFFF"))
         pen = QPen(color, 3.2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
         painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -154,11 +156,24 @@ class IconButton(QPushButton):
             painter.drawRect(-9,-11,6,22)
             painter.drawRect(3,-11,6,22)
         elif k == "reset":
-            # Anticlockwise reset arrow, in the same line-art style as other controls.
+            # Open circular arrow with a distinct arrowhead at the upper-left.
+            # Draw the arc and arrowhead separately to avoid the overlapping
+            # strokes that distorted the previous reset symbol.
             from PySide6.QtCore import QRectF, QPointF
-            painter.drawArc(QRectF(-12, -12, 24, 24), 30 * 16, 290 * 16)
-            painter.drawLine(QPointF(-12, -3), QPointF(-13, -12))
-            painter.drawLine(QPointF(-12, -3), QPointF(-3, -5))
+            from PySide6.QtGui import QPolygonF
+            # Mirror only the arc: the gap belongs on the LEFT.
+            # Leave the existing arrowhead geometry completely unchanged.
+            painter.save()
+            painter.scale(-1, 1)
+            painter.drawArc(QRectF(-11, -11, 22, 22), 140 * 16, 285 * 16)
+            painter.restore()
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(color)
+            painter.drawPolygon(QPolygonF([
+                QPointF(-12.8, -10.2),
+                QPointF(-12.3, -1.6),
+                QPointF(-5.0, -7.0),
+            ]))
         elif k in ("fullscreen", "exit_fullscreen"):
             # Four clean square corners; exit points the brackets inward.
             d = 9 if k == "fullscreen" else 5
@@ -278,7 +293,7 @@ class SettingsDialog(QDialog):
         self.presets = QLineEdit(", ".join(map(str, settings["presets"])))
         self.presets.setPlaceholderText("1, 3, 5, 10, 15")
         layout.addWidget(self.presets)
-        layout.addWidget(QLabel("Separate preset durations with commas. Maximum 12."))
+        layout.addWidget(QLabel("Separate preset durations with commas. Maximum 5."))
         form = QFormLayout()
         self.font = QFontComboBox()
         self.font.setCurrentFont(QFont(settings["font"]))
@@ -322,10 +337,10 @@ class SettingsDialog(QDialog):
     def accept(self):
         try:
             entries = [int(x.strip()) for x in self.presets.text().split(",") if x.strip()]
-            if not entries or len(entries) > 12 or any(x < 1 or x > 999 for x in entries):
+            if not entries or len(entries) > 5 or any(x < 1 or x > 999 for x in entries):
                 raise ValueError()
         except ValueError:
-            show_front_warning(self, "Invalid presets", "Enter 1–12 comma-separated whole numbers between 1 and 999.")
+            show_front_warning(self, "Invalid presets", "Enter 1–5 comma-separated whole numbers between 1 and 999.")
             return
         self.values.update(presets=entries, font=self.font.currentFont().family(),
                            opacity=self.opacity.value(),
@@ -334,72 +349,192 @@ class SettingsDialog(QDialog):
         super().accept()
 
 
+class ProgressStrip(QWidget):
+    """Full-width countdown progress; height matches the fullscreen play button."""
+    def __init__(self, timer):
+        super().__init__()
+        self.timer = timer
+        self.setFixedHeight(84)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+    def paintEvent(self, event):
+        if not self.timer.progress_started or self.timer.remaining <= 0:
+            return
+        maximum = max(0.001, self.timer.progress_max)
+        ratio = min(1.0, max(0.0, self.timer.remaining / maximum))
+        seconds = self.timer.remaining
+        colour = '#e5404b' if seconds <= 10 else '#e5e540' if seconds < 30 else '#43E5AD'
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.fillRect(self.rect(), QColor(255, 255, 255, 24))
+        painter.fillRect(0, 0, round(self.width() * ratio), self.height(), QColor(colour))
+        painter.end()
+
+
 class PresentationWindow(QWidget):
-    """Fullscreen view sharing the main timer's state and icon drawing."""
+    """Fullscreen view sharing countdown state and the main window's icons."""
     def __init__(self, timer):
         super().__init__()
         self.timer = timer
         self.settings = timer.settings
-        self.setWindowTitle("Teacher Timer · Presentation Mode")
+        self.alert_active = timer.finished and timer.remaining <= 0
+        self.setWindowTitle('Teacher Timer · Presentation Mode')
         self.setWindowIcon(timer.windowIcon())
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(36, 24, 36, 36)
+        layout.setContentsMargins(0, 0, 0, 28)
+        layout.setSpacing(0)
+
+        self.progress = ProgressStrip(timer)
+        self.progress_effect = QGraphicsOpacityEffect(self.progress)
+        self.progress.setGraphicsEffect(self.progress_effect)
+        self.progress_effect.setOpacity(1.0 if timer.progress_started and timer.remaining > 0 else 0.0)
+        self.progress_animation = QPropertyAnimation(self.progress_effect, b'opacity', self)
+        self.progress_animation.setDuration(450)
+        self.progress_animation.setEasingCurve(QEasingCurve.Type.InOutQuad)
+        layout.addWidget(self.progress)
+
         top = QHBoxLayout()
+        top.setContentsMargins(30, 10, 30, 0)
         top.addStretch()
-        self.exit_button = IconButton("exit_fullscreen", timer.exit_presentation, "topButton", 48)
-        self.exit_button.setToolTip("Exit fullscreen (Esc or F11)")
+        self.exit_button = IconButton('exit_fullscreen', timer.exit_presentation, 'topButton', 48)
+        self.exit_button.setToolTip('Exit fullscreen (Esc or F11)')
         top.addWidget(self.exit_button)
         layout.addLayout(top)
         layout.addStretch(2)
-        self.display = QLabel()
-        self.display.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.display.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        layout.addWidget(self.display, 5)
-        layout.addStretch(1)
-        controls = QHBoxLayout()
-        controls.setSpacing(18)
-        controls.addStretch()
-        self.minus_button = IconButton("minus", lambda: timer.adjust_seconds(-30), size=72)
-        self.play_button = IconButton("play", timer.toggle, "play", 84)
-        self.reset_button = IconButton("reset", timer.reset, size=72)
-        self.plus_button = IconButton("plus", lambda: timer.adjust_seconds(30), size=72)
-        for b in (self.minus_button, self.play_button, self.reset_button, self.plus_button):
-            controls.addWidget(b)
-        controls.addStretch()
-        layout.addLayout(controls)
-        layout.addStretch(1)
+
+        self.display_stack = QStackedWidget()
+        self.display = QPushButton()
+        self.display.setObjectName('fullscreenDisplay')
+        self.display.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.display.setToolTip('Click to enter a time as MMSS')
+        self.display.clicked.connect(self.edit_time)
+        self.display_stack.addWidget(self.display)
+        self.time_input = QLineEdit()
+        self.time_input.setObjectName('fullscreenTimeInput')
+        self.time_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.time_input.setMaxLength(4)
+        self.time_input.setToolTip('Type four digits MMSS, then Enter')
+        self.time_input.returnPressed.connect(self.commit_time)
+        self.display_stack.addWidget(self.time_input)
+        self.display_stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        layout.addWidget(self.display_stack, 5)
+        layout.addStretch(2)
+
+        bottom = QHBoxLayout()
+        bottom.setContentsMargins(36, 0, 36, 0)
+        bottom.setSpacing(18)
+        self.minus_button = IconButton('minus', lambda: timer.adjust_seconds(-30), size=72)
+        self.play_button = IconButton('play', timer.toggle, 'play', 84)
+        self.reset_button = IconButton('reset', timer.reset, size=72)
+        self.plus_button = IconButton('plus', lambda: timer.adjust_seconds(30), size=72)
+        for control in (self.minus_button, self.play_button, self.reset_button, self.plus_button):
+            bottom.addWidget(control)
+        bottom.addStretch(1)
+        self.preset_buttons = []
+        for minutes in timer.settings['presets'][:5]:
+            preset = button(f'{minutes}m', lambda checked=False, m=minutes: timer.select_preset(m), 'fullscreenPreset')
+            preset.setFixedHeight(64)
+            preset.setMinimumWidth(65)
+            font = QFont(timer.settings['font'])
+            font.setPixelSize(22)
+            font.setBold(True)
+            preset.setFont(font)
+            bottom.addWidget(preset)
+            self.preset_buttons.append(preset)
+        layout.addLayout(bottom)
         self.apply_theme()
+        QApplication.instance().installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        if self.alert_active and event.type() in (QEvent.Type.MouseButtonPress, QEvent.Type.KeyPress):
+            if isinstance(obj, QWidget) and (obj is self or self.isAncestorOf(obj)):
+                self.clear_alert()
+        return super().eventFilter(obj, event)
+
+    def clear_alert(self):
+        if self.alert_active:
+            self.alert_active = False
+            self.apply_theme()
+
+    def set_finished_alert(self):
+        if not self.alert_active:
+            self.alert_active = True
+            self.apply_theme()
+
+    def show_progress(self):
+        if self.timer.remaining <= 0:
+            return
+        self.progress_animation.stop()
+        self.progress_animation.setStartValue(self.progress_effect.opacity())
+        self.progress_animation.setEndValue(1.0)
+        self.progress_animation.start()
+        self.progress.update()
+
+    def hide_progress(self):
+        self.progress_animation.stop()
+        self.progress_effect.setOpacity(0.0)
+        self.progress.update()
+
+    def edit_time(self):
+        self.clear_alert()
+        seconds = max(0, int(self.timer.remaining + .999))
+        minutes, secs = divmod(seconds, 60)
+        self.time_input.setText(f'{min(minutes, 99):02}{secs:02}')
+        self.display_stack.setCurrentWidget(self.time_input)
+        self.time_input.setFocus()
+        self.time_input.selectAll()
+
+    def commit_time(self):
+        if self.display_stack.currentWidget() != self.time_input:
+            return
+        value = self.time_input.text().strip()
+        if len(value) != 4 or not value.isdigit() or int(value[2:]) > 59:
+            show_front_warning(self, 'Invalid time', 'Enter four digits in MMSS format, e.g. 0530.')
+            self.time_input.setFocus()
+            return
+        self.timer.set_time_seconds(int(value[:2]) * 60 + int(value[2:]))
+        self.display_stack.setCurrentWidget(self.display)
+        self.update_clock()
 
     def apply_theme(self):
         self.settings = self.timer.settings
         s = self.settings
+        background = '#e5404b' if self.alert_active else s['background_color']
+        foreground = '#ffffff' if self.alert_active else s['text_color']
         self.setStyleSheet(f"""
-            QWidget {{ background: {s['background_color']}; }}
-            QLabel {{ color: {s['text_color']}; background: transparent; }}
+            PresentationWindow {{ background: {background}; }}
+            QLabel, QPushButton#fullscreenDisplay {{ color: {foreground}; background: transparent; border: none; }}
             QPushButton {{ background: rgba(130,150,175,45); border: none; border-radius: 14px; }}
             QPushButton:hover {{ background: rgba(130,150,175,95); }}
             QPushButton#play {{ background: {s['accent_color']}; }}
             QPushButton#topButton {{ background: transparent; }}
+            QLineEdit#fullscreenTimeInput {{ background: rgba(255,255,255,25); color: {foreground}; border: 2px solid {s['accent_color']}; border-radius: 12px; }}
+            QPushButton#fullscreenPreset {{ color: {foreground}; }}
         """)
         self.update_clock()
+        self.update()
+        for control in (self.minus_button, self.play_button, self.reset_button,
+                        self.plus_button, self.exit_button):
+            control.update()
 
     def update_clock(self):
         label = self.timer.format_time()
         self.display.setText(label)
         font = QFont(self.settings['font'])
         font.setBold(True)
-        # Fit the digits to the actual available display width and height.
         available_width = max(100, self.width() - 100)
-        available_height = max(100, self.height() * 0.50)
+        available_height = max(100, self.height() * .45)
         size = max(30, min(int(available_height), 500))
         font.setPixelSize(size)
         while size > 30 and QFontMetrics(font).horizontalAdvance(label) > available_width:
             size -= 4
             font.setPixelSize(size)
         self.display.setFont(font)
-        self.play_button.kind = "pause" if self.timer.running else "play"
+        self.time_input.setFont(font)
+        self.play_button.kind = 'pause' if self.timer.running else 'play'
         self.play_button.update()
+        self.progress.update()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -407,13 +542,17 @@ class PresentationWindow(QWidget):
 
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key.Key_Escape, Qt.Key.Key_F11):
-            self.timer.exit_presentation()
-        elif event.key() == Qt.Key.Key_Space:
+            if self.display_stack.currentWidget() == self.time_input and event.key() == Qt.Key.Key_Escape:
+                self.display_stack.setCurrentWidget(self.display)
+            else:
+                self.timer.exit_presentation()
+        elif event.key() == Qt.Key.Key_Space and self.display_stack.currentWidget() != self.time_input:
             self.timer.toggle()
         else:
             super().keyPressEvent(event)
 
     def closeEvent(self, event):
+        QApplication.instance().removeEventFilter(self)
         if self.timer.presentation is self:
             event.ignore()
             self.timer.exit_presentation()
@@ -430,6 +569,9 @@ class TeacherTimer(QWidget):
         self.deadline = None
         self.running = False
         self.finished = False
+        self.progress_max = 0.0
+        self.progress_started = False
+        self.progress_needs_initialising = True
         self.docked = False
         self.presentation = None
         self.previous_position = None
@@ -578,19 +720,34 @@ class TeacherTimer(QWidget):
         self.tray = QSystemTrayIcon(self)
         self.tray.setIcon(tray_icon())
         self.tray.setToolTip("Teacher Timer")
-        menu = QMenu()
-        menu.addAction("Show Teacher Timer", self.show_normal)
-        menu.addAction("Dock / restore", self.toggle_dock)
-        menu.addAction("Start / pause", self.toggle)
-        menu.addAction("Reset", self.reset)
-        menu.addAction("Settings", self.open_settings)
-        menu.addSeparator()
-        menu.addAction("Quit", self.quit_app)
-        self.tray.setContextMenu(menu)
-        self.tray.activated.connect(lambda reason: self.show_normal() if reason == QSystemTrayIcon.ActivationReason.DoubleClick else None)
+        self.tray_menu = QMenu()
+        self.rebuild_tray_menu()
+        self.tray.setContextMenu(self.tray_menu)
+        self.tray.activated.connect(
+            lambda reason: self.show_normal()
+            if reason in (QSystemTrayIcon.ActivationReason.Trigger,
+                          QSystemTrayIcon.ActivationReason.DoubleClick) else None
+        )
         if QSystemTrayIcon.isSystemTrayAvailable():
             self.tray.show()
             self.tray.setIcon(tray_icon())
+
+    def rebuild_tray_menu(self):
+        """Refresh the tray choices from the current configured presets."""
+        self.tray_menu.clear()
+        for minutes in self.settings["presets"]:
+            self.tray_menu.addAction(
+                f"{minutes}m",
+                lambda checked=False, m=minutes: self.start_tray_preset(m)
+            )
+
+    def start_tray_preset(self, minutes):
+        """Open the main window and start the selected countdown immediately."""
+        if self.presentation is not None:
+            self.exit_presentation()
+        self.select_preset(minutes)
+        self.show_normal()
+        self.toggle()
 
     def apply_settings(self):
         s = self.settings
@@ -628,6 +785,7 @@ class TeacherTimer(QWidget):
                             self.minimize_button, self.close_button, self.fullscreen_button):
             icon_button.update()
         self.build_presets()
+        self.rebuild_tray_menu()
         self.scale_clock()
         if self.presentation is not None:
             self.presentation.apply_theme()
@@ -659,6 +817,7 @@ class TeacherTimer(QWidget):
         self.running = False
         self.deadline = None
         self.finished = False
+        self.mark_new_time()
         self.duration = minutes * 60
         self.remaining = float(self.duration)
         self.scale_clock()
@@ -692,22 +851,38 @@ class TeacherTimer(QWidget):
             self.time_input.setFocus()
             return
         self._invalid_time_value = None
-        duration = int(value[:2]) * 60 + int(value[2:])
+        self.set_time_seconds(int(value[:2]) * 60 + int(value[2:]))
+        self.display_stack.setCurrentWidget(self.display)
+
+    def mark_new_time(self):
+        """The next Play establishes a new progress maximum."""
+        self.progress_needs_initialising = True
+        self.progress_started = False
+        if self.presentation is not None:
+            self.presentation.hide_progress()
+            self.presentation.clear_alert()
+
+    def set_time_seconds(self, seconds):
         self.running = False
         self.deadline = None
         self.finished = False
-        self.duration = duration
-        self.remaining = float(duration)
-        self.display_stack.setCurrentWidget(self.display)
+        self.duration = max(0, int(seconds))
+        self.remaining = float(self.duration)
+        self.mark_new_time()
         self.scale_clock()
         self.refresh()
 
     def adjust_seconds(self, change):
+        was_running = self.running
+        if not was_running:
+            self.mark_new_time()
         if self.running:
             self.remaining = max(0.0, self.deadline - time.monotonic())
         self.remaining = max(0.0, self.remaining + change)
         self.duration = max(0, int(self.remaining + 0.999))
         self.finished = False
+        if was_running and self.progress_started and self.remaining > self.progress_max:
+            self.progress_max = self.remaining
         if (self.duration >= 3600) != (getattr(self, "_hours_layout", False)):
             self.scale_clock()
         if self.running:
@@ -733,6 +908,12 @@ class TeacherTimer(QWidget):
             if self.remaining <= 0:
                 self.remaining = float(self.duration)
                 self.finished = False
+            if self.progress_needs_initialising:
+                self.progress_max = max(0.001, self.remaining)
+                self.progress_needs_initialising = False
+                self.progress_started = self.remaining > 0
+                if self.presentation is not None:
+                    self.presentation.show_progress()
             self.deadline = time.monotonic() + self.remaining
             self.running = True
         self.refresh()
@@ -742,6 +923,7 @@ class TeacherTimer(QWidget):
         self.deadline = None
         self.remaining = float(self.duration)
         self.finished = False
+        self.mark_new_time()
         self.refresh()
 
     def tick(self):
@@ -752,6 +934,10 @@ class TeacherTimer(QWidget):
             self.running = False
             self.deadline = None
             self.finished = True
+            self.progress_started = False
+            if self.presentation is not None:
+                self.presentation.hide_progress()
+                self.presentation.set_finished_alert()
             if self.settings["sound"]:
                 QApplication.beep()
             if self.tray.isVisible():
@@ -812,6 +998,7 @@ class TeacherTimer(QWidget):
             return
         presentation = self.presentation
         self.presentation = None
+        QApplication.instance().removeEventFilter(presentation)
         presentation.hide()
         presentation.deleteLater()
         self.show()
@@ -895,7 +1082,59 @@ def main():
     app.setOrganizationName("Teacher Timer")
     app.setWindowIcon(QIcon(str(resource_path("TeacherTimer.ico"))))
     app.setQuitOnLastWindowClosed(False)
+
+    # One instance per Windows login. A second launch sends SHOW to the
+    # existing process and exits, rather than creating another tray icon.
+    # The user-specific suffix prevents clashes between different sessions.
+    if sys.platform == "win32":
+        import getpass
+        import hashlib
+        user_key = hashlib.sha256(getpass.getuser().encode("utf-8")).hexdigest()[:16]
+        server_name = f"TeacherTimer-{user_key}"
+    else:
+        server_name = f"TeacherTimer-{os.getuid()}"
+
+    def signal_existing():
+        socket = QLocalSocket()
+        socket.connectToServer(server_name)
+        if socket.waitForConnected(700):
+            socket.write(b"SHOW\n")
+            socket.flush()
+            socket.waitForBytesWritten(700)
+            socket.disconnectFromServer()
+            return True
+        return False
+
+    if signal_existing():
+        return
+
+    server = QLocalServer(app)
+    if not server.listen(server_name):
+        # A second launch may race the first one. Never remove a potentially
+        # live Windows endpoint just to force another instance to open.
+        if signal_existing():
+            return
+        if sys.platform != "win32":
+            QLocalServer.removeServer(server_name)  # clean up stale Unix socket
+            if not server.listen(server_name):
+                return
+        else:
+            return
+
     timer = TeacherTimer()
+
+    def accept_activation():
+        while server.hasPendingConnections():
+            socket = server.nextPendingConnection()
+            socket.waitForReadyRead(250)
+            if bytes(socket.readAll()).startswith(b"SHOW"):
+                if timer.presentation is not None:
+                    timer.exit_presentation()
+                timer.show_normal()
+            socket.disconnectFromServer()
+            socket.deleteLater()
+
+    server.newConnection.connect(accept_activation)
     timer.show()
     sys.exit(app.exec())
 
