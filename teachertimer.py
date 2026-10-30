@@ -183,7 +183,7 @@ class IconButton(QPushButton):
             # Draw the two arms into that endpoint, without a filled triangle.
             tip = QPointF(-9.97, -4.65)
             painter.drawLine(QPointF(-10.5, -11.0), tip)
-            painter.drawLine(tip, QPointF(-3.7, -7.4))
+            painter.drawLine(tip, QPointF(-4.8, -2.7))
         elif k in ("fullscreen", "exit_fullscreen"):
             # Four clean square corners; exit points the brackets inward.
             d = 9 if k == "fullscreen" else 5
@@ -350,6 +350,14 @@ class SettingsDialog(QDialog):
         layout.addStretch()
         scroll.setWidget(content)
         outer.addWidget(scroll)
+        copyright_note = QLabel(
+            "© 2026 Todd Beamish\n"
+            "Free to share within Pate's Grammar School."
+        )
+        copyright_note.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        copyright_note.setWordWrap(True)
+        copyright_note.setStyleSheet("color: #777777; font-size: 11px; padding: 8px 4px 2px;")
+        outer.addWidget(copyright_note)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -437,7 +445,7 @@ class PresentationWindow(QWidget):
         layout.addSpacing(14)
 
         self.content_row = QHBoxLayout()
-        self.content_row.setContentsMargins(32, 0, 32, 0)
+        self.content_row.setContentsMargins(32, 0, 24, 0)
         self.content_row.setSpacing(24)
         self.display_stack = QStackedWidget()
         self.display = QPushButton()
@@ -454,7 +462,9 @@ class PresentationWindow(QWidget):
         self.time_input.returnPressed.connect(self.commit_time)
         self.display_stack.addWidget(self.time_input)
         self.display_stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.content_row.addWidget(self.display_stack, 3)
+        # The clock must yield space to the protected instructions column.
+        self.display_stack.setMinimumWidth(0)
+        self.content_row.addWidget(self.display_stack, 1)
 
         self.instructions_panel = QFrame()
         self.instructions_panel.setObjectName('instructionsPanel')
@@ -480,9 +490,10 @@ class PresentationWindow(QWidget):
         self.text_larger.setToolTip('Increase instruction text size')
         self.text_clear.setToolTip('Clear instructions')
         panel_layout.addLayout(tools)
+        self.instructions_panel.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
         self.content_row.addWidget(self.instructions_panel, 0)
-        # Fixed panel width: changes to countdown text must not change its width.
-        self.instructions_panel.setFixedWidth(max(240, round(self.width() * .25)))
+        # Reserve one quarter of the actual usable width, not the clock's size hint.
+        self.update_content_widths()
         self.instructions_panel.hide()
         layout.addLayout(self.content_row, 1)
         layout.addSpacing(18)
@@ -512,9 +523,21 @@ class PresentationWindow(QWidget):
         self.apply_theme()
         QApplication.instance().installEventFilter(self)
 
+    def update_content_widths(self):
+        margins = self.content_row.contentsMargins()
+        usable = max(0, self.width() - margins.left() - margins.right())
+        if self.instructions_panel.isVisible():
+            notes_width = round(usable * 0.25)
+            clock_width = max(0, usable - notes_width - self.content_row.spacing())
+            self.instructions_panel.setFixedWidth(notes_width)
+            self.display_stack.setFixedWidth(clock_width)
+        else:
+            self.display_stack.setMinimumWidth(0)
+            self.display_stack.setMaximumWidth(16777215)
+
     def toggle_instructions(self):
-        self.instructions_panel.setFixedWidth(max(240, round(self.width() * .25)))
         self.instructions_panel.setVisible(not self.instructions_panel.isVisible())
+        self.update_content_widths()
         self.update_clock()
 
     def apply_instructions_font(self):
@@ -636,7 +659,7 @@ class PresentationWindow(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self.instructions_panel.setFixedWidth(max(240, round(self.width() * .25)))
+        self.update_content_widths()
         self.update_clock()
 
     def keyPressEvent(self, event):
@@ -878,8 +901,6 @@ class TeacherTimer(QWidget):
         button_hover = '#8d1d29' if self.alert_active else 'rgba(130,150,175,95)'
         play_bg = button_bg if self.alert_active else s['accent_color']
         top_bg = button_bg if self.alert_active else 'transparent'
-        selected_bg = button_bg if self.alert_active else s['accent_color']
-        selected_fg = '#ffffff' if self.alert_active else '#101820'
         self.panel.setStyleSheet(f"""
             QFrame#panel {{ background: {rgba}; border-radius: 18px; }}
             QLabel {{ color: {foreground}; }}
@@ -889,7 +910,6 @@ class TeacherTimer(QWidget):
             QLineEdit#timeInput {{ background: rgba(255,255,255,25); color: {foreground}; border: 2px solid {s["accent_color"]}; border-radius: 8px; }}
             QPushButton#display {{ background: transparent; padding: 0px; }}
             QPushButton#play {{ background: {play_bg}; color: {foreground}; font-weight: 700; }}
-            QPushButton#presetSelected {{ background: {selected_bg}; color: {selected_fg}; font-weight: 700; }}
             QPushButton#topButton {{ background: {top_bg}; padding: 0px; }}
         """)
         # Docked display is a sibling of panel, so style it independently.
@@ -1080,10 +1100,6 @@ class TeacherTimer(QWidget):
         if self.play_button.kind != desired_icon:
             self.play_button.kind = desired_icon
             self.play_button.update()
-        for minutes, b in getattr(self, "preset_buttons", []):
-            b.setObjectName("presetSelected" if self.duration == minutes * 60 else "preset")
-            b.style().unpolish(b)
-            b.style().polish(b)
         self.setWindowTitle(f"{label} · Teacher Timer")
         if self.presentation is not None:
             self.presentation.update_clock()
