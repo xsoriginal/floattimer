@@ -1558,6 +1558,11 @@ class TeacherTimer(QWidget):
             self.deadline = None
         else:
             if self.remaining <= 0:
+                # Restarting a completed countdown must also dismiss the red alert
+                # styling, whether triggered by Space or the Play button.
+                self.clear_alert()
+                if self.presentation is not None:
+                    self.presentation.clear_alert()
                 # A completed countdown starts a fresh run, not a paused run.
                 # Re-arm the fullscreen progress strip as well as the timer.
                 self.remaining = float(self.duration)
