@@ -219,6 +219,7 @@ class IconButton(QPushButton):
         scale = min(self.width(), self.height()) / 42
         painter.scale(scale, scale)
         window = self.window()
+        k = self.kind
         color = QColor('#ffffff' if getattr(window, 'alert_active', False)
                        else getattr(window, "settings", {}).get("text_color", "#FFFFFF"))
         if k in ('play', 'pause') and not getattr(window, 'alert_active', False):
@@ -228,7 +229,6 @@ class IconButton(QPushButton):
         pen = QPen(color, 3.2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
         painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        k = self.kind
         if k == "play":
             from PySide6.QtGui import QPolygonF
             from PySide6.QtCore import QPointF
@@ -958,7 +958,7 @@ class DraggableTopClock(FixedSlotClock):
         self.drag_start = None
         self.start_x = 0
         self.was_dragged = False
-        self.setCursor(Qt.CursorShape.SizeHorCursor)
+        self.setCursor(Qt.CursorShape.ArrowCursor)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -988,7 +988,7 @@ class DraggableTopClock(FixedSlotClock):
             if dragged:
                 self.owner.remember_top_position()
             else:
-                self.owner.toggle_dock()
+                QTimer.singleShot(0, self.owner.toggle_dock)
             event.accept()
             return
         super().mouseReleaseEvent(event)
@@ -1210,7 +1210,8 @@ class TeacherTimer(QWidget):
         if s["always_on_top"]:
             flags |= Qt.WindowType.WindowStaysOnTopHint
         was_visible = self.isVisible()
-        self.setWindowFlags(flags)
+        if self.windowFlags() != flags:
+            self.setWindowFlags(flags)
         bg = QColor("#e5404b" if self.alert_active else s["background_color"])
         bg.setAlphaF(s["opacity"] / 100)
         rgba = f"rgba({bg.red()}, {bg.green()}, {bg.blue()}, {bg.alpha()})"
@@ -1511,7 +1512,7 @@ class TeacherTimer(QWidget):
         save_top_position(self.top_horizontal_fraction)
 
     def toggle_dock(self):
-        self.clear_alert()
+        leaving_top = self.docked
         if not self.docked:
             self.previous_position = self.pos()
             self.previous_size = self.size()
@@ -1534,6 +1535,8 @@ class TeacherTimer(QWidget):
             if self.previous_position is not None:
                 self.move(self.previous_position)
             self.store_position()
+        if leaving_top:
+            self.clear_alert()
         self.refresh()
 
     def store_position(self):
