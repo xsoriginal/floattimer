@@ -1,5 +1,6 @@
-"""FloatTimer: compact, customisable, always-on-top countdown for Windows."""
+"""Teacher Timer: compact, customisable, always-on-top countdown for Windows."""
 import json
+import os
 import ctypes
 import sys
 import time
@@ -18,15 +19,28 @@ DEFAULT = {
     "presets": [1, 3, 5, 10, 15], "font": "Segoe UI", "font_size": 100,
     "text_color": "#FFFFFF", "background_color": "#101820",
     "accent_color": "#43E5AD", "opacity": 94, "always_on_top": True,
-    "sound": True, "x": None, "y": None, "width": None, "height": None,
+    "sound": True, "start_with_windows": False, "x": None, "y": None, "width": None, "height": None,
 }
 
 
+def resource_path(filename):
+    """Resolve resources in source checkout and PyInstaller onedir/onefile."""
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    return base / filename
+
+
 def settings_file():
-    import os
-    root = Path(os.getenv("APPDATA", str(Path.home()))) / "FloatTimer"
-    root.mkdir(parents=True, exist_ok=True)
-    return root / "settings.json"
+    """Save settings.json alongside the executable (or source script).
+
+    Never import settings from earlier installations or AppData.
+    PyInstaller's _MEIPASS points into _internal, so use sys.executable.
+    """
+    if getattr(sys, "frozen", False):
+        folder = Path(sys.executable).resolve().parent
+    else:
+        folder = Path(__file__).resolve().parent
+    return folder / "settings.json"
+
 
 
 def load_settings():
@@ -44,6 +58,58 @@ def load_settings():
 def save_settings(settings):
     settings_file().write_text(json.dumps(settings, indent=2), encoding="utf-8")
 
+
+
+STARTUP_REGISTRY_NAME = "Teacher Timer"
+
+
+def startup_command():
+    """Use the stable, extracted EXE path; never a PyInstaller temp directory."""
+    if getattr(sys, "frozen", False):
+        return f'"{Path(sys.executable).resolve()}"'
+    return None
+
+
+def is_windows_startup_enabled():
+    if sys.platform != "win32":
+        return False
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                            r"Software\Microsoft\Windows\CurrentVersion\Run") as key:
+            value, _ = winreg.QueryValueEx(key, STARTUP_REGISTRY_NAME)
+            return value == startup_command()
+    except OSError:
+        return False
+
+
+def set_windows_startup(enabled):
+    """Manage only this user's startup entry; administrator rights aren't needed."""
+    if sys.platform != "win32":
+        return
+    import winreg
+    command = startup_command()
+    if enabled and not command:
+        raise OSError("Windows startup requires the packaged TeacherTimer.exe")
+    with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER,
+                            r"Software\Microsoft\Windows\CurrentVersion\Run",
+                            0, winreg.KEY_SET_VALUE) as key:
+        if enabled:
+            winreg.SetValueEx(key, STARTUP_REGISTRY_NAME, 0, winreg.REG_SZ, command)
+        else:
+            try:
+                winreg.DeleteValue(key, STARTUP_REGISTRY_NAME)
+            except FileNotFoundError:
+                pass
+
+
+def tray_icon():
+    """Load the dedicated tray artwork, never the EXE's embedded icon."""
+    path = resource_path("TeacherTimer-Tray.ico")
+    icon = QIcon(str(path))
+    if icon.isNull():
+        raise FileNotFoundError(f"Teacher Timer tray icon is missing: {path}")
+    return icon
 
 def button(label, callback, name="control"):
     b = QPushButton(label)
@@ -115,7 +181,6 @@ class IconButton(QPushButton):
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(color)
             painter.drawPolygon(QPolygonF([QPointF(0,-15),QPointF(-13,-2),QPointF(-5,-2),QPointF(-5,9),QPointF(5,9),QPointF(5,-2),QPointF(13,-2)]))
-            painter.drawRect(-13,13,26,3)
         elif k == "settings":
             # A single even-odd fill path makes the hole truly transparent,
             # irrespective of the panel's background colour or opacity.
@@ -165,21 +230,46 @@ class DragBar(QFrame):
 
 
 def show_front_warning(parent, title, message):
-    """Application-modal, explicitly foregrounded alert above an always-on-top timer."""
+    """Show validation errors above the frameless, always-on-top timer on Windows."""
+    # A parented QMessageBox can sit behind a Qt.Tool always-on-top window.
+    # Give it its own top-level window and explicitly keep it above the timer.
     alert = QMessageBox(QMessageBox.Icon.Warning, title, message,
-                        QMessageBox.StandardButton.Ok, parent)
-    alert.setWindowFlags(alert.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
+                        QMessageBox.StandardButton.Ok, None)
+    alert.setWindowFlags(
+        Qt.WindowType.Dialog
+        | Qt.WindowType.WindowStaysOnTopHint
+        | Qt.WindowType.WindowTitleHint
+        | Qt.WindowType.WindowCloseButtonHint
+    )
     alert.setWindowModality(Qt.WindowModality.ApplicationModal)
-    alert.show()
-    alert.raise_()
-    alert.activateWindow()
+    alert.adjustSize()
+    if parent is not None:
+        centre = parent.frameGeometry().center()
+        alert.move(centre.x() - alert.width() // 2,
+                   centre.y() - alert.height() // 2)
+
+    def bring_to_front():
+        alert.raise_()
+        alert.activateWindow()
+        if sys.platform == "win32":
+            # Force the native dialog above the timer's topmost tool window.
+            HWND_TOPMOST = -1
+            SWP_NOMOVE = 0x0002
+            SWP_NOSIZE = 0x0001
+            SWP_SHOWWINDOW = 0x0040
+            ctypes.windll.user32.SetWindowPos(
+                int(alert.winId()), HWND_TOPMOST, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW
+            )
+
+    QTimer.singleShot(0, bring_to_front)
     return alert.exec()
 
 
 class SettingsDialog(QDialog):
     def __init__(self, settings, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("FloatTimer settings")
+        self.setWindowTitle("Teacher Timer settings")
         self.resize(490, 560)
         self.values = dict(settings)
         outer = QVBoxLayout(self)
@@ -196,10 +286,6 @@ class SettingsDialog(QDialog):
         self.font = QFontComboBox()
         self.font.setCurrentFont(QFont(settings["font"]))
         form.addRow("Countdown font", self.font)
-        self.font_size = QSpinBox()
-        self.font_size.setRange(36, 220)
-        self.font_size.setValue(settings["font_size"])
-        form.addRow("Number size", self.font_size)
         self.colors = {}
         for key, label in (("text_color", "Text colour"), ("background_color", "Background colour"), ("accent_color", "Accent colour")):
             b = QPushButton(settings[key])
@@ -217,6 +303,10 @@ class SettingsDialog(QDialog):
         self.sound = QCheckBox("Play alert when finished")
         self.sound.setChecked(settings["sound"])
         form.addRow(self.sound)
+        self.startup = QCheckBox("Start Teacher Timer when I sign in to Windows")
+        self.startup.setChecked(is_windows_startup_enabled() if sys.platform == "win32" else False)
+        self.startup.setEnabled(sys.platform == "win32" and startup_command() is not None)
+        form.addRow(self.startup)
         layout.addLayout(form)
         layout.addStretch()
         scroll.setWidget(content)
@@ -241,12 +331,13 @@ class SettingsDialog(QDialog):
             show_front_warning(self, "Invalid presets", "Enter 1–12 comma-separated whole numbers between 1 and 999.")
             return
         self.values.update(presets=entries, font=self.font.currentFont().family(),
-                           font_size=self.font_size.value(), opacity=self.opacity.value(),
-                           always_on_top=self.top.isChecked(), sound=self.sound.isChecked())
+                           opacity=self.opacity.value(),
+                           always_on_top=self.top.isChecked(), sound=self.sound.isChecked(),
+                           start_with_windows=self.startup.isChecked())
         super().accept()
 
 
-class FloatTimer(QWidget):
+class TeacherTimer(QWidget):
     def __init__(self):
         super().__init__()
         self.settings = load_settings()
@@ -258,7 +349,8 @@ class FloatTimer(QWidget):
         self.docked = False
         self.previous_position = None
         self.previous_size = None
-        self.setWindowTitle("FloatTimer")
+        self.setWindowTitle("Teacher Timer")
+        self.setWindowIcon(QIcon(str(resource_path("TeacherTimer.ico"))))
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.build_ui()
         self.setFixedSize(420, max(190, 58 + len(self.settings["presets"]) * 47))
@@ -299,7 +391,7 @@ class FloatTimer(QWidget):
         bar_layout.addWidget(minimize_button)
         close_button = IconButton("close", self.quit_app, "topButton", 32)
         self.close_button = close_button
-        close_button.setToolTip("Exit FloatTimer")
+        close_button.setToolTip("Exit Teacher Timer")
         bar_layout.addWidget(close_button)
         body.addWidget(bar)
         main = QHBoxLayout()
@@ -318,6 +410,8 @@ class FloatTimer(QWidget):
         self.time_input.setMaxLength(4)
         self.time_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.time_input.setToolTip("Type four digits MMSS, then Enter")
+        self._invalid_time_value = None
+        self.time_input.textEdited.connect(lambda _: setattr(self, "_invalid_time_value", None))
         self.time_input.returnPressed.connect(self.commit_time)
         self.time_input.editingFinished.connect(self.commit_time)
         self.display_stack.addWidget(self.time_input)
@@ -393,20 +487,11 @@ class FloatTimer(QWidget):
                                        dock_metrics.height() + 12)
 
     def make_tray(self):
-        pixmap = QPixmap(64, 64)
-        pixmap.fill(Qt.GlobalColor.transparent)
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setBrush(QColor("#43E5AD"))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(4, 4, 56, 56)
-        painter.setPen(QPen(QColor("#101820"), 5))
-        painter.drawLine(32, 13, 32, 32)
-        painter.drawLine(32, 32, 45, 39)
-        painter.end()
-        self.tray = QSystemTrayIcon(QIcon(pixmap), self)
+        self.tray = QSystemTrayIcon(self)
+        self.tray.setIcon(tray_icon())
+        self.tray.setToolTip("Teacher Timer")
         menu = QMenu()
-        menu.addAction("Show FloatTimer", self.show_normal)
+        menu.addAction("Show Teacher Timer", self.show_normal)
         menu.addAction("Dock / restore", self.toggle_dock)
         menu.addAction("Start / pause", self.toggle)
         menu.addAction("Reset", self.reset)
@@ -417,6 +502,7 @@ class FloatTimer(QWidget):
         self.tray.activated.connect(lambda reason: self.show_normal() if reason == QSystemTrayIcon.ActivationReason.DoubleClick else None)
         if QSystemTrayIcon.isSystemTrayAvailable():
             self.tray.show()
+            self.tray.setIcon(tray_icon())
 
     def apply_settings(self):
         s = self.settings
@@ -491,6 +577,7 @@ class FloatTimer(QWidget):
     def edit_time(self):
         if self.docked:
             return
+        self._invalid_time_value = None
         seconds = max(0, int(self.remaining + 0.999))
         minutes, secs = divmod(seconds, 60)
         self.time_input.blockSignals(True)
@@ -506,9 +593,15 @@ class FloatTimer(QWidget):
             return
         value = self.time_input.text().strip()
         if len(value) != 4 or not value.isdigit() or int(value[2:]) > 59:
+            # Return/Enter and focus loss can both trigger commit_time.
+            # Show one warning per invalid input, even across the modal event loop.
+            if self._invalid_time_value == value:
+                return
+            self._invalid_time_value = value
             show_front_warning(self, "Invalid time", "Enter four digits in MMSS format, e.g. 0530 for 5 minutes 30 seconds.")
             self.time_input.setFocus()
             return
+        self._invalid_time_value = None
         duration = int(value[:2]) * 60 + int(value[2:])
         self.running = False
         self.deadline = None
@@ -572,7 +665,7 @@ class FloatTimer(QWidget):
             if self.settings["sound"]:
                 QApplication.beep()
             if self.tray.isVisible():
-                self.tray.showMessage("FloatTimer", "Time's up!", QSystemTrayIcon.MessageIcon.Information, 4000)
+                self.tray.showMessage("Teacher Timer", "Time's up!", QSystemTrayIcon.MessageIcon.Information, 4000)
         self.refresh()
 
     def refresh(self):
@@ -590,7 +683,7 @@ class FloatTimer(QWidget):
             b.setObjectName("presetSelected" if self.duration == minutes * 60 else "preset")
             b.style().unpolish(b)
             b.style().polish(b)
-        self.setWindowTitle(f"{label} · FloatTimer")
+        self.setWindowTitle(f"{label} · Teacher Timer")
 
     def open_settings(self):
         dialog = SettingsDialog(self.settings, self)
@@ -600,6 +693,11 @@ class FloatTimer(QWidget):
         dialog.raise_()
         dialog.activateWindow()
         if dialog.exec() == QDialog.DialogCode.Accepted:
+            try:
+                set_windows_startup(dialog.values["start_with_windows"])
+            except OSError as exc:
+                show_front_warning(self, "Windows startup", f"Could not update startup setting: {exc}")
+                return
             self.settings = dialog.values
             save_settings(self.settings)
             self.apply_settings()
@@ -665,10 +763,13 @@ class FloatTimer(QWidget):
 def main():
     if sys.platform == "win32":
         # Stable identity for Windows taskbar and notification-area preferences.
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("FloatTimer.Desktop.Timer")
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("TeacherTimer.Desktop.Timer")
     app = QApplication(sys.argv)
+    app.setApplicationName("Teacher Timer")
+    app.setOrganizationName("Teacher Timer")
+    app.setWindowIcon(QIcon(str(resource_path("TeacherTimer.ico"))))
     app.setQuitOnLastWindowClosed(False)
-    timer = FloatTimer()
+    timer = TeacherTimer()
     timer.show()
     sys.exit(app.exec())
 
