@@ -1056,7 +1056,7 @@ class RedConfetti(QWidget):
         self.mode = mode
         self.timer_owner = timer
         self.started = time.monotonic()
-        self.duration = {'top': 3.2, 'float': 1.45, 'full': 3.8}[mode]
+        self.duration = {'top': 4.8, 'float': 2.7, 'full': 5.5}[mode]
         self.rng = random.Random()
         if mode == 'full':
             parent = timer.presentation
@@ -1081,29 +1081,44 @@ class RedConfetti(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
         self.pieces = []
-        count = {'top': 85, 'float': 44, 'full': 150}[mode]
+        count = {'top': 85, 'float': 72, 'full': 150}[mode]
         for _ in range(count):
             r = self.rng
             if mode == 'top':
                 ox, oy, w, h = self.origin
                 x = ox + r.uniform(.12, .88) * w
                 y = oy + h - r.uniform(0, 8)
-                vx, vy = r.uniform(-95, 95), r.uniform(15, 110)
+                vx, vy = r.uniform(-65, 65), r.uniform(0, 55)
                 delay = r.uniform(0, .55)
             elif mode == 'float':
                 ox, oy, w, h = self.origin
-                x = ox + w * r.uniform(.25, .75)
-                y = oy + h * r.uniform(.25, .75)
-                vx, vy = r.uniform(-220, 220), r.uniform(-260, -45)
-                delay = r.uniform(0, .16)
+                # Emit from just outside the timer's perimeter so the burst
+                # is immediately visible rather than hidden by the window.
+                side = r.randrange(4)
+                if side == 0:  # left
+                    x, y = ox - 5, oy + r.uniform(0, h)
+                    vx, vy = r.uniform(-340, -155), r.uniform(-245, 40)
+                elif side == 1:  # right
+                    x, y = ox + w + 5, oy + r.uniform(0, h)
+                    vx, vy = r.uniform(155, 340), r.uniform(-245, 40)
+                elif side == 2:  # top
+                    x, y = ox + r.uniform(0, w), oy - 5
+                    vx, vy = r.uniform(-235, 235), r.uniform(-320, -130)
+                else:  # bottom
+                    x, y = ox + r.uniform(0, w), oy + h + 5
+                    vx, vy = r.uniform(-235, 235), r.uniform(55, 195)
+                delay = r.uniform(0, .12)
             else:
                 x = r.uniform(0, self.width())
                 y = r.uniform(-35, 0)
-                vx, vy = r.uniform(-42, 42), r.uniform(100, 230)
+                vx, vy = r.uniform(-30, 30), r.uniform(35, 100)
                 delay = r.uniform(0, 1.35)
             self.pieces.append((x, y, vx, vy, delay, r.uniform(4, 9),
-                                r.uniform(0, 360), r.uniform(-240, 240),
-                                r.choice(('#ff9299', '#ffb5ba', '#ffd6d9', '#ad1425', '#871020', '#6b0b18'))))
+                                r.uniform(0, 360), r.uniform(-150, 150),
+                                r.choice(('#ff9299', '#ffb5ba', '#ffd6d9', '#ad1425', '#871020', '#6b0b18')),
+                                r.uniform(10, 38), r.uniform(1.7, 3.8),
+                                r.uniform(0, 2 * math.pi), r.uniform(75, 145),
+                                r.uniform(2.5, 5.5)))
         self.animation = QTimer(self)
         self.animation.setInterval(25)
         self.animation.timeout.connect(self.advance)
@@ -1118,7 +1133,8 @@ class RedConfetti(QWidget):
         if time.monotonic() - self.started >= self.duration:
             self.animation.stop()
             self.close()
-            self.deleteLater()
+            # This overlay is held by the timer until the next animation.
+            # Do not delete its C++ object while the timer still holds it.
         else:
             self.update()
 
@@ -1126,24 +1142,37 @@ class RedConfetti(QWidget):
         elapsed = time.monotonic() - self.started
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        for x, y, vx, vy, delay, size, angle, spin, colour_name in self.pieces:
+        for (x, y, vx, vy, delay, size, angle, spin, colour_name,
+             sway, frequency, phase, terminal, tumble) in self.pieces:
             age = elapsed - delay
             if age < 0:
                 continue
-            gravity = 520 if self.mode != 'full' else 65
-            px = x + vx * age
-            py = y + vy * age + .5 * gravity * age * age
+            # Air resistance slows the initial burst; each paper slip then
+            # settles towards its own gentle terminal falling speed.
+            drag = 2.5 if self.mode == 'float' else 1.8
+            travel = (1.0 - math.exp(-drag * age)) / drag
+            px = (x + vx * travel
+                  + sway * (math.sin(frequency * age * 2 * math.pi + phase)
+                            - math.sin(phase)))
+            py = (y + vy * travel
+                  + terminal * (age - travel)
+                  + 7 * math.sin(tumble * age + phase) * min(1.0, age * 2))
             if py > self.height() + 15 or px < -15 or px > self.width() + 15:
                 continue
-            fade = max(0., min(1., (self.duration - elapsed) / .55))
+            fade = max(0., min(1., (self.duration - elapsed) / .65))
             colour = QColor(colour_name)
             colour.setAlphaF(fade)
             painter.save()
             painter.translate(px, py)
-            painter.rotate(angle + spin * age)
+            # Rotating in the image plane plus changing apparent width gives
+            # the impression of paper flipping and catching air.
+            painter.rotate(angle + spin * age + 16 * math.sin(tumble * age + phase))
+            flip = math.cos(tumble * age * 1.8 + phase)
+            apparent_width = max(.18, abs(flip)) * size
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(colour)
-            painter.drawRect(QRectF(-size / 2, -size / 3, size, size * .66))
+            painter.drawRect(QRectF(-apparent_width / 2, -size / 3,
+                                    apparent_width, size * .66))
             painter.restore()
         painter.end()
 
@@ -2008,8 +2037,13 @@ class TeacherTimer(QWidget):
                 if selected == "Confetti Pop":
                     previous_overlay = getattr(self, "confetti_overlay", None)
                     if previous_overlay is not None:
-                        previous_overlay.close()
-                        previous_overlay.deleteLater()
+                        # Older builds deleted the underlying Qt object at the
+                        # end of an animation. Guard against stale wrappers.
+                        from shiboken6 import isValid
+                        if isValid(previous_overlay):
+                            previous_overlay.close()
+                            previous_overlay.deleteLater()
+                        self.confetti_overlay = None
                     # Retain the overlay until its own timer completes. Without
                     # a Python reference, the unparented desktop overlay can be
                     # collected immediately after this function returns.
