@@ -978,6 +978,14 @@ class PresentationWindow(QWidget):
         self.instructions_editor.clear()
 
     def eventFilter(self, obj, event):
+        # Consume Enter on the time field before Qt can propagate the same
+        # key press to the window after commit_time switches the active widget.
+        if (obj is self.time_input
+                and event.type() == QEvent.Type.KeyPress
+                and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)):
+            if not event.isAutoRepeat():
+                self.commit_time()
+            return True
         # Keyboard shortcuts work even when a child control has focus. Leave
         # text editors alone so spaces can be typed and Enter can commit MMSS.
         if (event.type() == QEvent.Type.KeyPress
@@ -1386,6 +1394,14 @@ class TeacherTimer(QWidget):
         self.toggle()
 
     def eventFilter(self, obj, event):
+        # Consume Enter on the time field before Qt can propagate the same
+        # key press to the window after commit_time switches the active widget.
+        if (obj is self.time_input
+                and event.type() == QEvent.Type.KeyPress
+                and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)):
+            if not event.isAutoRepeat():
+                self.commit_time()
+            return True
         # Keyboard shortcuts work even when a child control has focus. Leave
         # text editors alone so spaces can be typed and Enter can commit MMSS.
         if (event.type() == QEvent.Type.KeyPress
