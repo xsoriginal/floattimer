@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 DEFAULT = {
     "presets": [30, 60, 120, 300, 600], "preset_format": 2, "font": "Segoe UI", "font_size": 100,
     "text_color": "#000000", "background_color": "#DDA64B",
-    "accent_color": "#43E5AD", "opacity": 90, "always_on_top": True,
+    "accent_color": "#43E5AD", "opacity": 95, "always_on_top": True,
     "sound": True, "start_with_windows": False, "x": None, "y": None, "width": None, "height": None,
 }
 
@@ -1194,7 +1194,7 @@ class TeacherTimer(QWidget):
         self.dock_display.setFont(dock_font)
         dock_metrics = QFontMetrics(dock_font)
         self.dock_display.setFixedSize(FixedSlotClock.text_width(dock_font, template) + 24,
-                                       dock_metrics.height() + 12)
+                                       dock_metrics.height() + 6)  # 3px above/below instead of 6px
 
     def make_tray(self):
         self.tray = QSystemTrayIcon(self)
