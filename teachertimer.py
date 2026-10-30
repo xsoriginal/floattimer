@@ -88,14 +88,19 @@ def load_settings():
 
 
 def themed_button_colours(background):
-    """Opaque, background-derived button fills with progressively darker hover."""
+    """Use lighter controls on dark themes and darker controls on light themes."""
     base = QColor(background)
+    channels = [base.redF(), base.greenF(), base.blueF()]
+    linear = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+              for c in channels]
+    luminance = sum(a * b for a, b in zip(linear, (0.2126, 0.7152, 0.0722)))
+    if luminance < 0.18:
+        # Mix towards white, retaining the hue of the chosen background.
+        def lighten(amount):
+            return QColor.fromRgbF(*(c + (1 - c) * amount for c in channels)).name()
+        return lighten(0.18), lighten(0.28)
     def darken(factor):
-        return QColor.fromRgbF(
-            max(0.0, base.redF() * factor),
-            max(0.0, base.greenF() * factor),
-            max(0.0, base.blueF() * factor),
-        ).name()
+        return QColor.fromRgbF(*(c * factor for c in channels)).name()
     return darken(0.82), darken(0.65)
 
 
@@ -188,6 +193,9 @@ class IconButton(QPushButton):
         window = self.window()
         color = QColor('#ffffff' if getattr(window, 'alert_active', False)
                        else getattr(window, "settings", {}).get("text_color", "#FFFFFF"))
+        if k := self.kind:
+            if k in ('play', 'pause') and not getattr(window, 'alert_active', False):
+                color = QColor(getattr(window, 'settings', {}).get('accent_color', '#43E5AD'))
         pen = QPen(color, 3.2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
         painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -235,6 +243,15 @@ class IconButton(QPushButton):
             painter.drawRoundedRect(QRectF(-14, -11, 28, 22), 2, 2)
             painter.drawLine(-8, -4, 8, -4)
             painter.drawLine(-8, 3, 5, 3)
+        elif k in ("zoom_out", "zoom_in"):
+            # Small and large magnifying glasses, respectively.
+            from PySide6.QtCore import QRectF
+            if k == "zoom_out":
+                painter.drawEllipse(QRectF(-10, -11, 13, 13))
+                painter.drawLine(1, 0, 11, 10)
+            else:
+                painter.drawEllipse(QRectF(-13, -14, 20, 20))
+                painter.drawLine(4, 3, 14, 13)
         elif k == "trash":
             from PySide6.QtCore import QRectF
             painter.drawLine(-10, -9, 10, -9)
@@ -604,7 +621,6 @@ class PresentationWindow(QWidget):
         self.display = FixedSlotClock()
         self.display.setObjectName('fullscreenDisplay')
         self.display.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.display.setToolTip('Click to enter a time as MMSS')
         self.display.clicked.connect(self.edit_time)
         self.display.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         self.display.setMinimumSize(0, 0)
@@ -638,8 +654,8 @@ class PresentationWindow(QWidget):
         panel_layout.addWidget(self.instructions_editor, 1)
         tools = QHBoxLayout()
         tools.addStretch()
-        self.text_smaller = IconButton('minus', lambda: self.resize_instructions(-2), size=44)
-        self.text_larger = IconButton('plus', lambda: self.resize_instructions(2), size=44)
+        self.text_smaller = IconButton('zoom_out', lambda: self.resize_instructions(-2), size=44)
+        self.text_larger = IconButton('zoom_in', lambda: self.resize_instructions(2), size=44)
         self.text_clear = IconButton('trash', self.clear_instructions, size=44)
         for control in (self.text_smaller, self.text_larger, self.text_clear):
             tools.addWidget(control)
@@ -667,11 +683,11 @@ class PresentationWindow(QWidget):
         self.preset_buttons = []
         for seconds in timer.settings['presets'][:5]:
             preset = button(preset_label(seconds), lambda checked=False, s=seconds: timer.select_preset(s), 'fullscreenPreset')
-            preset.setFixedHeight(64)
+            preset.setFixedHeight(58)
             preset.setMinimumWidth(0)
             preset.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
             font = QFont(timer.settings['font'])
-            font.setPixelSize(22)
+            font.setPixelSize(20)
             font.setBold(True)
             preset.setFont(font)
             bottom.addWidget(preset, 1)
@@ -802,7 +818,7 @@ class PresentationWindow(QWidget):
             QPushButton#topButton, QPushButton#topButton:hover {{ background: {top_bg}; }}
             QLineEdit#fullscreenTimeInput {{ background: rgba(255,255,255,25); color: {foreground}; border: 2px solid {s['accent_color']}; border-radius: 12px; }}
             QPushButton#fullscreenPreset {{ color: {foreground}; }}
-            QFrame#instructionsPanel {{ border: 2px solid rgba(255,255,255,160); border-radius: 12px; background: transparent; }}
+            QFrame#instructionsPanel {{ border: 2px solid {button_bg}; border-radius: 12px; background: transparent; }}
             QPlainTextEdit#instructionsEditor {{ color: {foreground}; background: transparent; border: none; selection-background-color: {s['accent_color']}; }}
 
         """)
@@ -979,7 +995,7 @@ class TeacherTimer(QWidget):
         main.addLayout(left, stretch=1)
         body.addLayout(main)
         self.preset_box = QHBoxLayout()
-        self.preset_box.setSpacing(6)
+        self.preset_box.setSpacing(5)
         body.addLayout(self.preset_box)
         # The complete interface is hidden in dock mode, leaving only a clickable time.
         self.dock_display = FixedSlotClock("05:00")
@@ -1015,7 +1031,7 @@ class TeacherTimer(QWidget):
         # The controls must also fit at the baseline size, including their spacing.
         controls_width = 42 + 50 + 42 + 42 + 3 * 7 + 16
         left_width = max(clock_width, controls_width)
-        presets_width = len(self.settings["presets"]) * 60 + max(0, len(self.settings["presets"]) - 1) * 6
+        presets_width = len(self.settings["presets"]) * 54 + max(0, len(self.settings["presets"]) - 1) * 6
         width = max(left_width, presets_width) + 18 + 28 + 24
         height = max(190, clock_height + 50 + 43 + 32 + 32)
         if not self.docked:
@@ -1138,11 +1154,11 @@ class TeacherTimer(QWidget):
         for seconds in self.settings["presets"]:
             b = button(preset_label(seconds), lambda _=False, s=seconds: self.select_preset(s), "preset")
             font = QFont(self.settings["font"])
-            font.setPixelSize(20)
+            font.setPixelSize(18)
             font.setBold(True)
             b.setFont(font)
             b.setMinimumWidth(0)
-            b.setMinimumHeight(43)
+            b.setMinimumHeight(39)
             self.preset_box.addWidget(b, 1)
             self.preset_buttons.append((seconds, b))
         self.refresh()
