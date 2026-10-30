@@ -223,19 +223,34 @@ _WOODBLOCK_PCM_ZLIB_B64 = (
 )
 
 def _woodblock_sound(name):
-    """Build the original soft-woodblock strike or its two-hit variant."""
+    """Create clean single/double strikes from the same soft woodblock sample."""
     if name in _AUDIO_CACHE:
         return _AUDIO_CACHE[name]
+    import array
     strike = zlib.decompress(base64.b64decode(''.join(_WOODBLOCK_PCM_ZLIB_B64)))
+    # The embedded strike is mono, signed 16-bit PCM at 22,050 Hz.
+    # Shape a gentle release so the second strike cannot produce a click.
+    samples = array.array('h')
+    samples.frombytes(strike)
+    fade_count = min(1102, len(samples) // 3)  # 50 ms
+    for i in range(fade_count):
+        idx = len(samples) - fade_count + i
+        samples[idx] = int(samples[idx] * (1.0 - i / fade_count))
+    strike = samples.tobytes()
+
     if name == "Double Beep":
-        # Two identical soft woodblock strikes, separated by 300 ms.
-        gap = b'\\x00\\x00' * max(0, int(22050 * .30) - len(strike) // 2)
-        data = strike + gap + strike
+        # Exactly two clean hits, 420 ms apart (onset to onset).
+        # Use actual binary zero PCM, not the ASCII text '\\x00'.
+        interval_frames = int(22050 * .42)
+        silence_frames = max(0, interval_frames - len(samples))
+        data = strike + bytes(silence_frames * 2) + strike
     else:
         data = strike
+
     folder = Path(tempfile.gettempdir()) / "TeacherTimerSounds"
     folder.mkdir(parents=True, exist_ok=True)
-    path = folder / ("soft_woodblock_double.wav" if name == "Double Beep" else "soft_woodblock_pip.wav")
+    path = folder / ("soft_woodblock_double_v2.wav" if name == "Double Beep"
+                     else "soft_woodblock_pip_v2.wav")
     with wave.open(str(path), "wb") as wav:
         wav.setnchannels(1)
         wav.setsampwidth(2)
@@ -471,6 +486,16 @@ def cork_sound_path():
     if not path.is_file():
         path.write_bytes(zlib.decompress(base64.b64decode(''.join(_CORK_WAV_ZLIB_B64))))
     return path
+
+
+def play_wav_native(path):
+    """Play a local WAV on Windows without relying on Qt Multimedia."""
+    try:
+        import winsound
+        winsound.PlaySound(str(path), winsound.SND_FILENAME |
+                           winsound.SND_ASYNC | winsound.SND_NODEFAULT)
+    except (OSError, RuntimeError, ValueError):
+        QApplication.beep()
 
 
 def play_alert_sound(name):
@@ -2261,12 +2286,19 @@ class TeacherTimer(QWidget):
                         self.confetti_overlay = RedConfetti(self, 'top')
                     else:
                         self.confetti_overlay = RedConfetti(self, 'float')
-                    self.cork_effect.stop()
-                    self.cork_effect.play()
+                    # Windows: play the cork WAV through the same native
+                    # backend used by the other completion sounds. QSoundEffect
+                    # can silently fail if its multimedia backend is unavailable
+                    # or the sample has not finished loading.
+                    if sys.platform == "win32":
+                        play_wav_native(cork_sound_path())
+                    else:
+                        self.cork_effect.stop()
+                        self.cork_effect.play()
                 else:
                     play_alert_sound(selected)
-            if self.tray.isVisible():
-                self.tray.showMessage("Teacher Timer", "Time's up!", QSystemTrayIcon.MessageIcon.Information, 4000)
+            # The visible red alert already communicates completion.
+            # Avoid a redundant Windows notification toast at exactly 00:00.
         self.refresh()
 
     def refresh(self):
