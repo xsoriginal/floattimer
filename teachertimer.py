@@ -200,6 +200,25 @@ def tray_icon():
         raise FileNotFoundError(f"Teacher Timer tray icon is missing: {path}")
     return icon
 
+def running_tray_icon():
+    """Colour the existing tray artwork green without changing its silhouette."""
+    source = tray_icon()
+    result = QIcon()
+    for size in (16, 20, 24, 32, 48, 64, 256):
+        pixmap = source.pixmap(size, size)
+        if pixmap.isNull():
+            continue
+        tinted = QPixmap(pixmap.size())
+        tinted.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(tinted)
+        painter.drawPixmap(0, 0, pixmap)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+        painter.fillRect(tinted.rect(), QColor('#43E5AD'))
+        painter.end()
+        result.addPixmap(tinted)
+    return result
+
+
 def button(label, callback, name="control"):
     b = QPushButton(label)
     b.setObjectName(name)
@@ -641,14 +660,19 @@ class FixedSlotClock(QPushButton):
             bg = QColor('#e5404b' if getattr(owner, 'alert_active', False)
                         else owner.settings['background_color'])
             bg.setAlphaF(0.80)
-            path = QPainterPath()
+            # Draw a single translucent shape: square top corners and rounded
+            # bottom corners. Overlapping translucent fills darken the colour.
             rect = QRectF(self.rect())
-            path.addRoundedRect(rect, 12, 12)
+            radius = min(12.0, rect.width() / 2, rect.height() / 2)
+            path = QPainterPath()
+            path.moveTo(rect.left(), rect.top())
+            path.lineTo(rect.right(), rect.top())
+            path.lineTo(rect.right(), rect.bottom() - radius)
+            path.quadTo(rect.right(), rect.bottom(), rect.right() - radius, rect.bottom())
+            path.lineTo(rect.left() + radius, rect.bottom())
+            path.quadTo(rect.left(), rect.bottom(), rect.left(), rect.bottom() - radius)
+            path.closeSubpath()
             painter.fillPath(path, bg)
-            # Top mode is flush against the screen edge: square top corners,
-            # while retaining the rounded lower corners.
-            painter.fillRect(QRectF(rect.left(), rect.top(), rect.width(),
-                                    min(12.0, rect.height())), bg)
         painter.setFont(self.font())
         painter.setPen(self.clock_colour)
         label = self.text()
@@ -1048,6 +1072,7 @@ class TeacherTimer(QWidget):
         self.running = False
         self.finished = False
         self.alert_active = False
+        self.minimized_to_tray = False
         self.progress_max = 0.0
         self.progress_started = False
         self.progress_needs_initialising = True
@@ -1096,7 +1121,7 @@ class TeacherTimer(QWidget):
         self.settings_button = settings_button
         settings_button.setToolTip("Settings")
         bar_layout.addWidget(settings_button)
-        minimize_button = IconButton("minimize", self.hide, "topButton", 32)
+        minimize_button = IconButton("minimize", self.minimize_to_tray, "topButton", 32)
         self.minimize_button = minimize_button
         minimize_button.setToolTip("Minimise to tray")
         bar_layout.addWidget(minimize_button)
@@ -1211,6 +1236,20 @@ class TeacherTimer(QWidget):
         if QSystemTrayIcon.isSystemTrayAvailable():
             self.tray.show()
             self.tray.setIcon(tray_icon())
+
+    def update_tray_icon(self):
+        if not hasattr(self, 'tray'):
+            return
+        active = self.minimized_to_tray and self.running
+        if getattr(self, '_tray_running_icon', None) == active:
+            return
+        self.tray.setIcon(running_tray_icon() if active else tray_icon())
+        self._tray_running_icon = active
+
+    def minimize_to_tray(self):
+        self.minimized_to_tray = True
+        self.hide()
+        self.update_tray_icon()
 
     def rebuild_tray_menu(self):
         """Refresh the tray choices from the current configured presets."""
@@ -1432,6 +1471,7 @@ class TeacherTimer(QWidget):
                     self.presentation.show_progress()
             self.deadline = time.monotonic() + self.remaining
             self.running = True
+        self.update_tray_icon()
         self.refresh()
 
     def reset(self):
@@ -1440,6 +1480,7 @@ class TeacherTimer(QWidget):
         self.remaining = float(self.duration)
         self.finished = False
         self.mark_new_time()
+        self.update_tray_icon()
         self.refresh()
 
     def tick(self):
@@ -1457,6 +1498,10 @@ class TeacherTimer(QWidget):
             else:
                 self.alert_active = True
                 self.apply_settings()
+            if self.minimized_to_tray:
+                # Bring the completed timer back in Float mode without clearing its alert.
+                self.restore_finished_alert()
+            self.update_tray_icon()
             if self.settings["sound"]:
                 QApplication.beep()
             if self.tray.isVisible():
@@ -1591,7 +1636,20 @@ class TeacherTimer(QWidget):
         self.settings["y"] = self.y()
         save_settings(self.settings)
 
+    def restore_finished_alert(self):
+        self.minimized_to_tray = False
+        if self.docked:
+            self.toggle_dock()
+        self.alert_active = True
+        self.apply_settings()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self.update_tray_icon()
+
     def show_normal(self):
+        self.minimized_to_tray = False
+        self.update_tray_icon()
         self.clear_alert()
         if self.docked:
             self.toggle_dock()
