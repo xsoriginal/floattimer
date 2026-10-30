@@ -8,7 +8,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QPoint, QSize, Signal, QPropertyAnimation, QEasingCurve, QEvent
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPainter, QPixmap, QPen, QBrush, QFontMetrics, QPainterPath
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPainter, QPixmap, QPen, QBrush, QFontMetrics, QPainterPath, QLinearGradient
 from PySide6.QtWidgets import (
     QApplication, QWidget, QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QPushButton, QLabel, QLineEdit, QSpinBox, QDoubleSpinBox, QCheckBox,
@@ -85,6 +85,18 @@ def load_settings():
         result["presets"] = list(DEFAULT["presets"])
     result["preset_format"] = 2
     return result
+
+
+def themed_button_colours(background):
+    """Opaque, background-derived button fills with progressively darker hover."""
+    base = QColor(background)
+    def darken(factor):
+        return QColor.fromRgbF(
+            max(0.0, base.redF() * factor),
+            max(0.0, base.greenF() * factor),
+            max(0.0, base.blueF() * factor),
+        ).name()
+    return darken(0.82), darken(0.65)
 
 
 def preset_label(seconds):
@@ -328,7 +340,7 @@ class SettingsDialog(QDialog):
     def __init__(self, settings, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Teacher Timer settings")
-        self.resize(490, 560)
+        self.resize(490, 588)
         self.values = dict(settings)
         outer = QVBoxLayout(self)
         scroll = QScrollArea()
@@ -468,8 +480,18 @@ class ProgressStrip(QWidget):
         colour = '#e5404b' if seconds <= 10 else '#e5e540' if seconds < 30 else '#43E5AD'
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.fillRect(self.rect(), QColor(255, 255, 255, 24))
+        # Dark, translucent track keeps empty progress legible on any theme.
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 95))
         painter.fillRect(0, 0, round(self.width() * ratio), self.height(), QColor(colour))
+        # A narrow dark edge defines the bar even against similarly coloured
+        # backgrounds; the lower gradient reads as a subtle inset shadow.
+        painter.setPen(QPen(QColor(0, 0, 0, 115), 2))
+        painter.drawLine(0, 0, self.width(), 0)
+        painter.drawLine(0, self.height() - 1, self.width(), self.height() - 1)
+        shadow = QLinearGradient(0, self.height() - 14, 0, self.height())
+        shadow.setColorAt(0.0, QColor(0, 0, 0, 0))
+        shadow.setColorAt(1.0, QColor(0, 0, 0, 85))
+        painter.fillRect(0, self.height() - 14, self.width(), 14, shadow)
         painter.end()
 
 
@@ -646,6 +668,12 @@ class PresentationWindow(QWidget):
         self.instructions_editor.clear()
 
     def eventFilter(self, obj, event):
+        if (event.type() == QEvent.Type.MouseButtonPress
+                and self.display_stack.currentWidget() is self.time_input
+                and isinstance(obj, QWidget)
+                and (obj is self or self.isAncestorOf(obj))
+                and obj is not self.time_input):
+            self.cancel_time_entry()
         if self.alert_active and event.type() in (QEvent.Type.MouseButtonPress, QEvent.Type.KeyPress):
             if isinstance(obj, QWidget) and (obj is self or self.isAncestorOf(obj)):
                 self.clear_alert()
@@ -684,6 +712,11 @@ class PresentationWindow(QWidget):
         self.time_input.setFocus()
         self.time_input.selectAll()
 
+    def cancel_time_entry(self):
+        if self.display_stack.currentWidget() is self.time_input:
+            self.display_stack.setCurrentWidget(self.display)
+            self.update_clock()
+
     def commit_time(self):
         if self.display_stack.currentWidget() != self.time_input:
             return
@@ -701,9 +734,8 @@ class PresentationWindow(QWidget):
         s = self.settings
         background = '#e5404b' if self.alert_active else s['background_color']
         foreground = '#ffffff' if self.alert_active else s['text_color']
-        button_bg = '#a52330' if self.alert_active else 'rgba(130,150,175,45)'
-        button_hover = '#8d1d29' if self.alert_active else 'rgba(130,150,175,95)'
-        play_bg = button_bg if self.alert_active else s['accent_color']
+        button_bg, button_hover = themed_button_colours(background)
+        play_bg = button_bg
         top_bg = 'transparent'
         self.setStyleSheet(f"""
             PresentationWindow {{ background: {background}; }}
@@ -711,6 +743,7 @@ class PresentationWindow(QWidget):
             QPushButton {{ background: {button_bg}; border: none; border-radius: 14px; }}
             QPushButton:hover {{ background: {button_hover}; }}
             QPushButton#play {{ background: {play_bg}; }}
+            QPushButton#play:hover {{ background: {button_hover}; }}
             QPushButton#topButton, QPushButton#topButton:hover {{ background: {top_bg}; }}
             QLineEdit#fullscreenTimeInput {{ background: rgba(255,255,255,25); color: {foreground}; border: 2px solid {s['accent_color']}; border-radius: 12px; }}
             QPushButton#fullscreenPreset {{ color: {foreground}; }}
@@ -961,6 +994,12 @@ class TeacherTimer(QWidget):
         self.toggle()
 
     def eventFilter(self, obj, event):
+        if (event.type() == QEvent.Type.MouseButtonPress
+                and self.display_stack.currentWidget() is self.time_input
+                and isinstance(obj, QWidget)
+                and (obj is self or self.isAncestorOf(obj))
+                and obj is not self.time_input):
+            self.cancel_time_entry()
         if (self.alert_active
                 and event.type() in (QEvent.Type.MouseButtonPress, QEvent.Type.KeyPress)
                 and isinstance(obj, QWidget)
@@ -984,9 +1023,8 @@ class TeacherTimer(QWidget):
         bg.setAlphaF(s["opacity"] / 100)
         rgba = f"rgba({bg.red()}, {bg.green()}, {bg.blue()}, {bg.alpha()})"
         foreground = "#ffffff" if self.alert_active else s["text_color"]
-        button_bg = '#a52330' if self.alert_active else 'rgba(130,150,175,45)'
-        button_hover = '#8d1d29' if self.alert_active else 'rgba(130,150,175,95)'
-        play_bg = button_bg if self.alert_active else s['accent_color']
+        button_bg, button_hover = themed_button_colours('#e5404b' if self.alert_active else s['background_color'])
+        play_bg = button_bg
         top_bg = 'transparent'
         self.panel.setStyleSheet(f"""
             QFrame#panel {{ background: {rgba}; border-radius: 18px; }}
@@ -997,6 +1035,7 @@ class TeacherTimer(QWidget):
             QLineEdit#timeInput {{ background: rgba(255,255,255,25); color: {foreground}; border: 2px solid {s["accent_color"]}; border-radius: 8px; }}
             QPushButton#display {{ background: transparent; padding: 0px; }}
             QPushButton#play {{ background: {play_bg}; color: {foreground}; font-weight: 700; }}
+            QPushButton#play:hover {{ background: {button_hover}; }}
             QPushButton#topButton, QPushButton#topButton:hover {{ background: {top_bg}; padding: 0px; }}
         """)
         # Docked display is a sibling of panel, so style it independently.
@@ -1064,6 +1103,14 @@ class TeacherTimer(QWidget):
         self.display_stack.setCurrentWidget(self.time_input)
         self.time_input.setFocus()
         self.time_input.selectAll()
+
+    def cancel_time_entry(self):
+        if self.display_stack.currentWidget() is self.time_input:
+            # Suppress editingFinished: clicking outside must discard, not save.
+            self.time_input.blockSignals(True)
+            self.display_stack.setCurrentWidget(self.display)
+            self.time_input.blockSignals(False)
+            self.refresh()
 
     def commit_time(self):
         if self.display_stack.currentWidget() != self.time_input:
