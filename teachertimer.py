@@ -60,19 +60,20 @@ def _synth_sound(name):
             # A very brief, soft high-frequency strike gives the bell definition.
             signal += .065 * math.exp(-85 * t) * math.sin(2 * math.pi * 3900 * t)
         elif name == "Playful Upward":
-            # Bright, rising C-E-G-C flourish with a gently ringing final note.
-            notes = ((0.00, .20, 523.25), (.19, .20, 659.25),
-                     (.38, .21, 783.99), (.60, .66, 1046.50))
+            # Warm, rounded rising flourish: softened attacks, lower register,
+            # almost pure sine tones and gentle overlapping decays.
+            notes = ((0.00, .22, 466.16), (.20, .22, 587.33),
+                     (.40, .23, 698.46), (.63, .66, 932.33))
             signal = 0.0
             for start, duration, freq in notes:
                 age = t - start
                 if 0 <= age < duration + .18:
-                    attack = min(1.0, age / .009)
-                    decay = math.exp(-3.0 * max(0.0, age - .07))
-                    tail = min(1.0, max(0.0, (duration + .18 - age) / .12))
-                    signal += .21 * attack * decay * tail * (
+                    attack = min(1.0, age / .035)
+                    decay = math.exp(-2.5 * max(0.0, age - .09))
+                    tail = min(1.0, max(0.0, (duration + .18 - age) / .17))
+                    signal += .18 * attack * decay * tail * (
                         math.sin(2 * math.pi * freq * age) +
-                        .16 * math.sin(2 * math.pi * 2 * freq * age))
+                        .045 * math.sin(2 * math.pi * 2 * freq * age))
         elif name == "Double Beep":
             pulse = (0 <= t < .16) or (.30 <= t < .46)
             phase = t if t < .30 else t - .30
@@ -947,6 +948,19 @@ class PresentationWindow(QWidget):
         self.instructions_editor.clear()
 
     def eventFilter(self, obj, event):
+        # Keyboard shortcuts work even when a child control has focus. Leave
+        # text editors alone so spaces can be typed and Enter can commit MMSS.
+        if (event.type() == QEvent.Type.KeyPress
+                and isinstance(obj, QWidget)
+                and (obj is self or self.isAncestorOf(obj))
+                and not isinstance(obj, (QLineEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox, QComboBox))
+                and not event.isAutoRepeat()):
+            if event.key() == Qt.Key.Key_Space and self.display_stack.currentWidget() is not self.time_input:
+                self.timer.toggle()
+                return True
+            if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                self.edit_time()
+                return True
         if (event.type() == QEvent.Type.MouseButtonPress
                 and self.display_stack.currentWidget() is self.time_input
                 and isinstance(obj, QWidget)
@@ -1342,6 +1356,20 @@ class TeacherTimer(QWidget):
         self.toggle()
 
     def eventFilter(self, obj, event):
+        # Keyboard shortcuts work even when a child control has focus. Leave
+        # text editors alone so spaces can be typed and Enter can commit MMSS.
+        if (event.type() == QEvent.Type.KeyPress
+                and isinstance(obj, QWidget)
+                and (obj is self or self.isAncestorOf(obj))
+                and not isinstance(obj, (QLineEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox, QComboBox))
+                and not event.isAutoRepeat()):
+            if event.key() == Qt.Key.Key_Space and self.display_stack.currentWidget() is not self.time_input:
+                self.toggle()
+                return True
+            if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                self.show_normal() if self.docked else None
+                self.edit_time()
+                return True
         if (event.type() == QEvent.Type.MouseButtonPress
                 and self.display_stack.currentWidget() is self.time_input
                 and isinstance(obj, QWidget)
