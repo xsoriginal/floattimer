@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 
 DEFAULT = {
     "presets": [30, 60, 120, 300, 600], "preset_format": 2, "font": "Segoe UI", "font_size": 100,
-    "text_color": "#FFFFFF", "background_color": "#101820",
+    "text_color": "#000000", "background_color": "#DDA64B",
     "accent_color": "#43E5AD", "opacity": 90, "always_on_top": True,
     "sound": True, "start_with_windows": False, "x": None, "y": None, "width": None, "height": None,
 }
@@ -130,6 +130,13 @@ def themed_button_colours(background):
     def darken(factor):
         return QColor.fromRgbF(*(c * factor for c in channels)).name()
     return darken(0.82), darken(0.65)
+
+
+def accent_hover_colour(accent):
+    """A stronger shade of the accent, independent of the background theme."""
+    colour = QColor(accent)
+    return QColor.fromRgbF(*(channel * 0.80 for channel in
+                             (colour.redF(), colour.greenF(), colour.blueF()))).name()
 
 
 def preset_label(seconds):
@@ -562,18 +569,24 @@ class ProgressStrip(QWidget):
         colour = '#e5404b' if seconds <= 10 else '#e5e540' if seconds < 30 else '#43E5AD'
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        # Dark, translucent track keeps empty progress legible on any theme.
+        # Flat, slightly darkened empty track: no bevels or drop shadows.
         painter.fillRect(self.rect(), QColor(0, 0, 0, 95))
-        painter.fillRect(0, 0, round(self.width() * ratio), self.height(), QColor(colour))
-        # A narrow dark edge defines the bar even against similarly coloured
-        # backgrounds; the lower gradient reads as a subtle inset shadow.
-        painter.setPen(QPen(QColor(0, 0, 0, 115), 2))
-        painter.drawLine(0, 0, self.width(), 0)
-        painter.drawLine(0, self.height() - 1, self.width(), self.height() - 1)
-        shadow = QLinearGradient(0, self.height() - 14, 0, self.height())
-        shadow.setColorAt(0.0, QColor(0, 0, 0, 0))
-        shadow.setColorAt(1.0, QColor(0, 0, 0, 85))
-        painter.fillRect(0, self.height() - 14, self.width(), 14, shadow)
+        fill_end = self.width() * ratio
+        # Feather only the final 12 pixels of the filled section.  The leading
+        # portion remains fully opaque and the end tapers gently into the track.
+        feather = min(12.0, fill_end)
+        solid_end = max(0.0, fill_end - feather)
+        if solid_end > 0:
+            painter.fillRect(QRectF(0, 0, solid_end, self.height()), QColor(colour))
+        if feather > 0:
+            fade = QLinearGradient(solid_end, 0, fill_end, 0)
+            fade.setColorAt(0.0, QColor(colour))
+            fade.setColorAt(1.0, QColor(colour).lighter(100))
+            # Fade alpha rather than colour: the underlying track shows through.
+            tip = QColor(colour)
+            tip.setAlpha(0)
+            fade.setColorAt(1.0, tip)
+            painter.fillRect(QRectF(solid_end, 0, feather, self.height()), fade)
         painter.end()
 
 
@@ -868,6 +881,7 @@ class PresentationWindow(QWidget):
         foreground = '#ffffff' if self.alert_active else s['text_color']
         button_bg, button_hover = themed_button_colours(background)
         play_bg = button_bg if self.alert_active else s["accent_color"]
+        play_hover = button_hover if self.alert_active else accent_hover_colour(s["accent_color"])
         top_bg = 'transparent'
         self.setStyleSheet(f"""
             PresentationWindow {{ background: {background}; }}
@@ -875,7 +889,7 @@ class PresentationWindow(QWidget):
             QPushButton {{ background: {button_bg}; border: none; border-radius: 14px; }}
             QPushButton:hover {{ background: {button_hover}; }}
             QPushButton#play {{ background: {play_bg}; }}
-            QPushButton#play:hover {{ background: {button_hover}; }}
+            QPushButton#play:hover {{ background: {play_hover}; }}
             QPushButton#topButton, QPushButton#topButton:hover {{ background: {top_bg}; }}
             QLineEdit#fullscreenTimeInput {{ background: rgba(255,255,255,25); color: {foreground}; border: 2px solid {s['accent_color']}; border-radius: 12px; }}
             QPushButton#fullscreenPreset {{ color: {foreground}; }}
@@ -1218,6 +1232,7 @@ class TeacherTimer(QWidget):
         foreground = "#ffffff" if self.alert_active else s["text_color"]
         button_bg, button_hover = themed_button_colours('#e5404b' if self.alert_active else s['background_color'])
         play_bg = button_bg if self.alert_active else s["accent_color"]
+        play_hover = button_hover if self.alert_active else accent_hover_colour(s["accent_color"])
         top_bg = 'transparent'
         self.panel.setStyleSheet(f"""
             QFrame#panel {{ background: {rgba}; border-radius: 18px; }}
@@ -1228,7 +1243,7 @@ class TeacherTimer(QWidget):
             QLineEdit#timeInput {{ background: rgba(255,255,255,25); color: {foreground}; border: 2px solid {s["accent_color"]}; border-radius: 8px; }}
             QPushButton#display {{ background: transparent; padding: 0px; }}
             QPushButton#play {{ background: {play_bg}; color: {foreground}; font-weight: 700; }}
-            QPushButton#play:hover {{ background: {button_hover}; }}
+            QPushButton#play:hover {{ background: {play_hover}; }}
             QPushButton#topButton, QPushButton#topButton:hover {{ background: {top_bg}; padding: 0px; }}
         """)
         self.display.set_clock_colour(foreground)
