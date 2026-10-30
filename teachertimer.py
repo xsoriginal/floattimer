@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QApplication, QWidget, QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QPushButton, QLabel, QLineEdit, QSpinBox, QDoubleSpinBox, QCheckBox,
     QColorDialog, QFontComboBox, QComboBox, QDialogButtonBox, QSystemTrayIcon, QMenu,
-    QMessageBox, QScrollArea, QFrame, QStackedWidget, QSizePolicy, QPlainTextEdit
+    QMessageBox, QScrollArea, QFrame, QStackedWidget, QSizePolicy, QPlainTextEdit, QGraphicsOpacityEffect
 )
 
 DEFAULT = {
@@ -960,7 +960,7 @@ class TeacherTimer(QWidget):
         self.time_input.returnPressed.connect(self.commit_time)
         self.time_input.editingFinished.connect(self.commit_time)
         self.display_stack.addWidget(self.time_input)
-        left.addWidget(self.display_stack, stretch=1)
+        left.addWidget(self.display_stack, stretch=1, alignment=Qt.AlignmentFlag.AlignHCenter)
         controls = QHBoxLayout()
         controls.setSpacing(7)
         self.minus_button = IconButton("minus", lambda: self.adjust_seconds(-30))
