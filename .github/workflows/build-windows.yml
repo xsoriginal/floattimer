@@ -1,5 +1,5 @@
 
-name: Build Windows EXE
+name: Build Teacher Timer EXE
 
 on:
   workflow_dispatch:
@@ -23,15 +23,16 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller
+          python -m pip install -r requirements.txt
+          python -m pip install pyinstaller
 
-      - name: Build FloatTimer
+      - name: Build Teacher Timer
         run: |
-          pyinstaller --onefile --windowed --name FloatTimer floattimer.py
+          python -m PyInstaller --noconfirm --clean --onedir --windowed --name TeacherTimer --icon TeacherTimer.ico --add-data "TeacherTimer.ico;." --add-data "TeacherTimer-Tray.ico;." teachertimer.py
 
-      - name: Upload Windows EXE
+      - name: Upload Windows application
         uses: actions/upload-artifact@v4
         with:
-          name: FloatTimer-Windows
-          path: dist/FloatTimer.exe
+          name: TeacherTimer-Windows
+          path: dist/TeacherTimer/
+          if-no-files-found: error
