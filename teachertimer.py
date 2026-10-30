@@ -41,6 +41,8 @@ def _synth_sound(name):
     """Build a short 16-bit mono WAV in the temporary directory on first use."""
     if name in _AUDIO_CACHE:
         return _AUDIO_CACHE[name]
+    if name in ("Final pip", "Double Beep"):
+        return _woodblock_sound(name)
     rate = 22050
     length = {"Bell": 2.1, "Double Beep": 0.65, "Playful Upward": 1.35, "Final pip": 0.13}.get(name, 0)
     if not length:
@@ -96,6 +98,151 @@ def _synth_sound(name):
         wav.writeframes(b''.join(samples))
     _AUDIO_CACHE[name] = str(file)
     return str(file)
+
+
+# The exact Soft Woodblock sample chosen for the five-second pips.
+# Store a single strike in the script so packaged Windows builds need no asset.
+_WOODBLOCK_PCM_ZLIB_B64 = (
+    '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'
+)
+
+def _woodblock_sound(name):
+    """Build the original soft-woodblock strike or its two-hit variant."""
+    if name in _AUDIO_CACHE:
+        return _AUDIO_CACHE[name]
+    strike = zlib.decompress(base64.b64decode(''.join(_WOODBLOCK_PCM_ZLIB_B64)))
+    if name == "Double Beep":
+        # Two identical soft woodblock strikes, separated by 300 ms.
+        gap = b'\\x00\\x00' * max(0, int(22050 * .30) - len(strike) // 2)
+        data = strike + gap + strike
+    else:
+        data = strike
+    folder = Path(tempfile.gettempdir()) / "TeacherTimerSounds"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / ("soft_woodblock_double.wav" if name == "Double Beep" else "soft_woodblock_pip.wav")
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(22050)
+        wav.writeframes(data)
+    _AUDIO_CACHE[name] = str(path)
+    return str(path)
 
 
 # User-provided cork-pop recording, converted losslessly to WAV for Qt playback.
@@ -1049,14 +1196,90 @@ class FlexibleClockStack(QStackedWidget):
         return QSize(0, 0)
 
 
+class ConfettiSlip:
+    """One paper slip with independently evolving position, air and orientation."""
+
+    def __init__(self, rng, x, y, vx, vy, delay, colour):
+        self.x, self.y = x, y
+        self.vx, self.vy = vx, vy
+        self.delay = delay
+        self.colour = QColor(colour)
+        self.width = rng.uniform(5.0, 10.0)
+        self.height = rng.uniform(3.0, 6.5)
+        self.angle = rng.uniform(-32, 32)
+        self.angular_velocity = rng.uniform(-14, 14)
+        self.tilt_target = rng.uniform(-28, 28)
+        self.tilt_change = rng.uniform(.13, .55)
+        self.tilt_clock = rng.uniform(0, self.tilt_change)
+        self.face_phase = rng.uniform(0, 2 * math.pi)
+        self.face_rate = rng.uniform(2.1, 6.4)
+        self.face_width = 1.0
+        self.drift = rng.uniform(-16, 16)
+        self.wind_target = rng.uniform(-35, 35)
+        self.wind_change = rng.uniform(.18, .85)
+        self.wind_clock = rng.uniform(0, self.wind_change)
+        self.drag = rng.uniform(2.0, 5.5)
+        self.terminal_broad = rng.uniform(28, 68)
+        self.terminal_edge = rng.uniform(105, 195)
+        self.mass_response = rng.uniform(1.8, 4.5)
+        self.flutter_kick = rng.uniform(4, 16)
+        self.age = 0.0
+        self.active = False
+
+    def step(self, dt, elapsed, rng):
+        if elapsed < self.delay:
+            return
+        if not self.active:
+            self.active = True
+            # A late-spawning slip should begin at its origin.
+            self.age = 0.0
+        self.age += dt
+        self.wind_clock -= dt
+        if self.wind_clock <= 0:
+            self.wind_target = rng.uniform(-58, 58)
+            self.wind_change = rng.uniform(.20, .95)
+            self.wind_clock = self.wind_change
+
+        self.tilt_clock -= dt
+        if self.tilt_clock <= 0:
+            self.tilt_target = rng.uniform(-37, 37)
+            self.tilt_change = rng.uniform(.17, .72)
+            self.tilt_clock = self.tilt_change
+
+        # Each piece meets changing air currents at different moments.
+        self.drift += (self.wind_target - self.drift) * min(1.0, dt * 2.5)
+        self.vx += ((self.drift - self.vx) * self.drag +
+                    rng.uniform(-self.flutter_kick, self.flutter_kick)) * dt
+
+        # Apparent edge-on/broadside presentation changes air resistance.
+        self.face_phase += self.face_rate * dt
+        broadside = abs(math.cos(self.face_phase))
+        self.face_width = max(.12, broadside)
+        terminal = (self.terminal_broad * broadside +
+                    self.terminal_edge * (1.0 - broadside))
+        # Paper rises from the launch, slows, then settles into its own descent.
+        self.vy += (terminal - self.vy) * min(1.0, dt * self.mass_response)
+        self.vy += rng.uniform(-12, 12) * dt
+
+        # Damped rocking toward a shifting tilt target; no endless spinning.
+        angular_accel = (self.tilt_target - self.angle) * 18.0 - self.angular_velocity * 9.0
+        self.angular_velocity += angular_accel * dt
+        self.angle += self.angular_velocity * dt
+        self.angle = max(-50.0, min(50.0, self.angle))
+        self.x += self.vx * dt
+        self.y += self.vy * dt
+
+
 class RedConfetti(QWidget):
-    """Three mode-specific, click-through red confetti animations."""
+    """Short-lived, click-through confetti with independently simulated slips."""
+
     def __init__(self, timer, mode):
         import random
         self.mode = mode
         self.timer_owner = timer
         self.started = time.monotonic()
-        self.duration = {'top': 4.8, 'float': 2.7, 'full': 5.5}[mode]
+        self.last_frame = self.started
+        self.duration = {'top': 5.5, 'float': 4.0, 'full': 6.5}[mode]
         self.rng = random.Random()
         if mode == 'full':
             parent = timer.presentation
@@ -1065,7 +1288,6 @@ class RedConfetti(QWidget):
             self.origin = None
         else:
             super().__init__(None)
-            # Resolve the screen containing the timer, including multi-monitor setups.
             timer_pos = timer.mapToGlobal(QPoint(timer.width() // 2, timer.height() // 2))
             screen = QApplication.screenAt(timer_pos) or timer.screen() or QApplication.primaryScreen()
             screen_rect = screen.geometry()
@@ -1080,45 +1302,40 @@ class RedConfetti(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+
         self.pieces = []
-        count = {'top': 85, 'float': 72, 'full': 150}[mode]
-        for _ in range(count):
+        palette = ('#ff9299', '#ffb5ba', '#ffd6d9', '#ad1425', '#871020', '#6b0b18')
+        for _ in range({'top': 85, 'float': 72, 'full': 150}[mode]):
             r = self.rng
             if mode == 'top':
                 ox, oy, w, h = self.origin
                 x = ox + r.uniform(.12, .88) * w
                 y = oy + h - r.uniform(0, 8)
-                vx, vy = r.uniform(-65, 65), r.uniform(0, 55)
-                delay = r.uniform(0, .55)
+                vx, vy = r.uniform(-80, 80), r.uniform(-20, 55)
+                delay = r.uniform(0, .75)
             elif mode == 'float':
                 ox, oy, w, h = self.origin
-                # Emit from just outside the timer's perimeter so the burst
-                # is immediately visible rather than hidden by the window.
                 side = r.randrange(4)
-                if side == 0:  # left
+                if side == 0:
                     x, y = ox - 5, oy + r.uniform(0, h)
-                    vx, vy = r.uniform(-340, -155), r.uniform(-245, 40)
-                elif side == 1:  # right
+                    vx, vy = r.uniform(-390, -175), r.uniform(-280, 25)
+                elif side == 1:
                     x, y = ox + w + 5, oy + r.uniform(0, h)
-                    vx, vy = r.uniform(155, 340), r.uniform(-245, 40)
-                elif side == 2:  # top
+                    vx, vy = r.uniform(175, 390), r.uniform(-280, 25)
+                elif side == 2:
                     x, y = ox + r.uniform(0, w), oy - 5
-                    vx, vy = r.uniform(-235, 235), r.uniform(-320, -130)
-                else:  # bottom
+                    vx, vy = r.uniform(-270, 270), r.uniform(-390, -180)
+                else:
                     x, y = ox + r.uniform(0, w), oy + h + 5
-                    vx, vy = r.uniform(-235, 235), r.uniform(55, 195)
-                delay = r.uniform(0, .12)
+                    vx, vy = r.uniform(-270, 270), r.uniform(60, 210)
+                delay = r.uniform(0, .15)
             else:
                 x = r.uniform(0, self.width())
-                y = r.uniform(-35, 0)
-                vx, vy = r.uniform(-30, 30), r.uniform(35, 100)
-                delay = r.uniform(0, 1.35)
-            self.pieces.append((x, y, vx, vy, delay, r.uniform(4, 9),
-                                r.uniform(0, 360), r.uniform(-150, 150),
-                                r.choice(('#ff9299', '#ffb5ba', '#ffd6d9', '#ad1425', '#871020', '#6b0b18')),
-                                r.uniform(10, 38), r.uniform(1.7, 3.8),
-                                r.uniform(0, 2 * math.pi), r.uniform(75, 145),
-                                r.uniform(2.5, 5.5)))
+                y = r.uniform(-45, 0)
+                vx, vy = r.uniform(-55, 55), r.uniform(15, 95)
+                delay = r.uniform(0, 1.7)
+            self.pieces.append(ConfettiSlip(r, x, y, vx, vy, delay,
+                                            r.choice(palette)))
         self.animation = QTimer(self)
         self.animation.setInterval(25)
         self.animation.timeout.connect(self.advance)
@@ -1126,53 +1343,44 @@ class RedConfetti(QWidget):
         self.show()
         self.raise_()
         if mode == 'float':
-            # Keep the timer itself above the puff without activating it.
             timer.raise_()
 
     def advance(self):
-        if time.monotonic() - self.started >= self.duration:
+        now = time.monotonic()
+        elapsed = now - self.started
+        if elapsed >= self.duration:
             self.animation.stop()
             self.close()
-            # This overlay is held by the timer until the next animation.
-            # Do not delete its C++ object while the timer still holds it.
-        else:
-            self.update()
+            # Keep the Qt object valid until the next animation replaces it.
+            return
+        # Limit huge time steps after Windows sleep or a busy GUI frame.
+        dt = min(.05, max(.001, now - self.last_frame))
+        self.last_frame = now
+        for slip in self.pieces:
+            slip.step(dt, elapsed, self.rng)
+        self.update()
 
     def paintEvent(self, event):
-        elapsed = time.monotonic() - self.started
+        remaining = self.duration - (time.monotonic() - self.started)
+        fade = max(0.0, min(1.0, remaining / .8))
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        for (x, y, vx, vy, delay, size, angle, spin, colour_name,
-             sway, frequency, phase, terminal, tumble) in self.pieces:
-            age = elapsed - delay
-            if age < 0:
+        for slip in self.pieces:
+            if not slip.active:
                 continue
-            # Air resistance slows the initial burst; each paper slip then
-            # settles towards its own gentle terminal falling speed.
-            drag = 2.5 if self.mode == 'float' else 1.8
-            travel = (1.0 - math.exp(-drag * age)) / drag
-            px = (x + vx * travel
-                  + sway * (math.sin(frequency * age * 2 * math.pi + phase)
-                            - math.sin(phase)))
-            py = (y + vy * travel
-                  + terminal * (age - travel)
-                  + 7 * math.sin(tumble * age + phase) * min(1.0, age * 2))
-            if py > self.height() + 15 or px < -15 or px > self.width() + 15:
+            if (slip.y < -20 or slip.y > self.height() + 20 or
+                    slip.x < -20 or slip.x > self.width() + 20):
                 continue
-            fade = max(0., min(1., (self.duration - elapsed) / .65))
-            colour = QColor(colour_name)
-            colour.setAlphaF(fade)
             painter.save()
-            painter.translate(px, py)
-            # Rotating in the image plane plus changing apparent width gives
-            # the impression of paper flipping and catching air.
-            painter.rotate(angle + spin * age + 16 * math.sin(tumble * age + phase))
-            flip = math.cos(tumble * age * 1.8 + phase)
-            apparent_width = max(.18, abs(flip)) * size
+            painter.translate(slip.x, slip.y)
+            painter.rotate(slip.angle)
+            colour = QColor(slip.colour)
+            colour.setAlphaF(fade)
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(colour)
-            painter.drawRect(QRectF(-apparent_width / 2, -size / 3,
-                                    apparent_width, size * .66))
+            visible_width = slip.width * slip.face_width
+            painter.drawRect(QRectF(-visible_width / 2, -slip.height / 2,
+                                    visible_width, slip.height))
             painter.restore()
         painter.end()
 
