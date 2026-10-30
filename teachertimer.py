@@ -455,6 +455,36 @@ def show_front_warning(parent, title, message):
     try:
         alert = QMessageBox(QMessageBox.Icon.Warning, title, message,
                             QMessageBox.StandardButton.Ok, owner)
+        # Give the warning its own complete palette. Without this, the
+        # fullscreen window's generic QPushButton rules leak into QMessageBox,
+        # leaving an unpainted OK button and unreadable dark-mode text.
+        alert.setObjectName("teacherTimerWarning")
+        alert.setStyleSheet("""
+            QMessageBox#teacherTimerWarning {
+                background-color: #252932;
+                color: #f5f5f5;
+            }
+            QMessageBox#teacherTimerWarning QLabel {
+                background: transparent;
+                color: #f5f5f5;
+                font-size: 14px;
+            }
+            QMessageBox#teacherTimerWarning QPushButton {
+                background-color: #414957;
+                color: #ffffff;
+                border: 1px solid #667080;
+                border-radius: 6px;
+                padding: 7px 24px;
+                min-width: 72px;
+                min-height: 24px;
+            }
+            QMessageBox#teacherTimerWarning QPushButton:hover {
+                background-color: #536073;
+            }
+            QMessageBox#teacherTimerWarning QPushButton:pressed {
+                background-color: #343b47;
+            }
+        """)
         alert.setWindowModality(Qt.WindowModality.ApplicationModal)
         alert.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
         alert.adjustSize()
