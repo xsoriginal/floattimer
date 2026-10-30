@@ -69,7 +69,8 @@ class IconButton(QPushButton):
         painter.translate(self.width() / 2, self.height() / 2)
         scale = min(self.width(), self.height()) / 42
         painter.scale(scale, scale)
-        color = QColor("#101820") if self.objectName() == "play" else QColor("#FFFFFF")
+        window = self.window()
+        color = QColor(getattr(window, "settings", {}).get("text_color", "#FFFFFF"))
         pen = QPen(color, 3.2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
         painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -88,9 +89,11 @@ class IconButton(QPushButton):
         elif k == "reset":
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(color)
-            letter = QFont("Arial", 24, QFont.Weight.Bold)
+            letter = QFont("Arial", 28, QFont.Weight.Bold)
+            letter.setPixelSize(28)
             painter.setFont(letter)
-            painter.drawText(-17, -17, 34, 34, Qt.AlignmentFlag.AlignCenter, "R")
+            from PySide6.QtCore import QRectF
+            painter.drawText(QRectF(-20, -20, 40, 40), Qt.AlignmentFlag.AlignCenter, "R")
         elif k == "minus":
             painter.drawLine(-10,0,10,0)
         elif k == "plus":
@@ -115,8 +118,10 @@ class IconButton(QPushButton):
             painter.setBrush(color)
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawEllipse(-9,-9,18,18)
-            painter.setBrush(QColor("#101820"))
+            # Clear the centre using composition rather than painting a fixed colour.
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
             painter.drawEllipse(-4,-4,8,8)
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
         elif k == "minimize":
             painter.drawLine(-10,6,10,6)
         elif k == "close":
@@ -259,12 +264,15 @@ class FloatTimer(QWidget):
         self.dock_button.setToolTip("Dock at top centre (click time to restore)")
         bar_layout.addWidget(self.dock_button)
         settings_button = IconButton("settings", self.open_settings, "topButton", 32)
+        self.settings_button = settings_button
         settings_button.setToolTip("Settings")
         bar_layout.addWidget(settings_button)
         minimize_button = IconButton("minimize", self.hide, "topButton", 32)
+        self.minimize_button = minimize_button
         minimize_button.setToolTip("Minimise to tray")
         bar_layout.addWidget(minimize_button)
         close_button = IconButton("close", self.quit_app, "topButton", 32)
+        self.close_button = close_button
         close_button.setToolTip("Exit FloatTimer")
         bar_layout.addWidget(close_button)
         body.addWidget(bar)
@@ -319,41 +327,44 @@ class FloatTimer(QWidget):
         self.dock_display.customContextMenuRequested.connect(lambda _: self.toggle_dock())
 
     def scale_clock(self):
-        """Size main window once for the selected font, not for changing digits."""
+        """Fit the main countdown without ever shrinking below its 100px layout."""
         if not hasattr(self, "display"):
             return
+        size = int(self.settings["font_size"])
         font = QFont(self.settings["font"])
         font.setBold(True)
-        font.setPixelSize(int(self.settings["font_size"]))
-        metrics = QFontMetrics(font)
-        # Reserve the widest representative digits, independent of the time.
-        # Use an eight-digit template when the selected presets require hours.
+        font.setPixelSize(size)
+        baseline = QFont(self.settings["font"])
+        baseline.setBold(True)
+        baseline.setPixelSize(100)
         needs_hours = max(self.settings["presets"]) >= 60 or self.duration >= 3600
         self._hours_layout = needs_hours
         template = "88:88:88" if needs_hours else "88:88"
-        clock_width = metrics.horizontalAdvance(template) + 28
-        clock_height = metrics.height() + 18
-        self.display_stack.setFixedWidth(clock_width)
-        self.display_stack.setFixedHeight(clock_height)
+        fm = QFontMetrics(font)
+        base_fm = QFontMetrics(baseline)
+        clock_width = max(fm.horizontalAdvance(template), base_fm.horizontalAdvance(template)) + 30
+        clock_height = max(fm.height(), base_fm.height()) + 20
+        self.display_stack.setFixedSize(clock_width, clock_height)
         self.display.setFont(font)
         self.time_input.setFont(font)
-        self.display.setMinimumSize(clock_width, clock_height)
-        self.time_input.setMinimumSize(clock_width, clock_height)
+        # The controls must also fit at the baseline size, including their spacing.
+        controls_width = 42 + 50 + 42 + 42 + 3 * 7 + 16
+        left_width = max(clock_width, controls_width)
+        presets_width = 76
+        # outer margins 18, panel margins 28, column gap 10, plus spare padding.
+        width = left_width + presets_width + 18 + 28 + 10 + 12
+        height = max(190, 58 + len(self.settings["presets"]) * 47,
+                     clock_height + 50 + 32 + 28)
         if not self.docked:
-            # Fixed-size window, but recomputed when the user changes settings.
-            # 76px presets + 10px gap + 28px body margins + 18px outer margins.
-            width = clock_width + 76 + 10 + 28 + 18
-            height = max(190, 58 + len(self.settings["presets"]) * 47,
-                         clock_height + 50 + 32 + 28)
             self.setFixedSize(width, height)
+        # Dock mode has its own constant font size, independent of this setting.
         dock_font = QFont(self.settings["font"])
         dock_font.setBold(True)
-        dock_font.setPixelSize(48)  # Fixed, compact; independent of number-size setting.
+        dock_font.setPixelSize(48)
         self.dock_display.setFont(dock_font)
         dock_metrics = QFontMetrics(dock_font)
-        dock_template = "88:88:88" if needs_hours else "88:88"
-        self.dock_display.setFixedSize(dock_metrics.horizontalAdvance(dock_template) + 28,
-                                       dock_metrics.height() + 14)
+        self.dock_display.setFixedSize(dock_metrics.horizontalAdvance(template) + 24,
+                                       dock_metrics.height() + 12)
 
     def make_tray(self):
         pixmap = QPixmap(64, 64)
@@ -397,13 +408,25 @@ class FloatTimer(QWidget):
             QPushButton {{ background: rgba(130,150,175,45); color: {s['text_color']};
                           border: none; border-radius: 9px; padding: 7px 11px; }}
             QPushButton:hover {{ background: rgba(130,150,175,95); }}
-            QPushButton#dockDisplay {{ background: {rgba}; color: {s["text_color"]}; border-radius: 12px; padding: 2px 12px; }}
             QLineEdit#timeInput {{ background: rgba(255,255,255,25); color: {s["text_color"]}; border: 2px solid {s["accent_color"]}; border-radius: 8px; }}
             QPushButton#display {{ background: transparent; padding: 0px; }}
-            QPushButton#play {{ background: {s['accent_color']}; color: #101820; font-weight: 700; }}
+            QPushButton#play {{ background: {s['accent_color']}; color: {s['text_color']}; font-weight: 700; }}
             QPushButton#presetSelected {{ background: {s['accent_color']}; color: #101820; font-weight: 700; }}
             QPushButton#topButton {{ background: transparent; padding: 0px; }}
         """)
+        # Docked display is a sibling of panel, so style it independently.
+        dock_bg = QColor(s["background_color"])
+        dock_bg.setAlphaF(0.80)
+        dock_rgba = f"rgba({dock_bg.red()}, {dock_bg.green()}, {dock_bg.blue()}, {dock_bg.alpha()})"
+        self.dock_display.setStyleSheet(
+            f"QPushButton {{ background-color: {dock_rgba}; color: {s['text_color']}; "
+            "border: none; border-bottom-left-radius: 12px; "
+            "border-bottom-right-radius: 12px; padding: 0px; }}"
+        )
+        for icon_button in (self.dock_button, self.play_button, self.reset_button,
+                            self.minus_button, self.plus_button, self.settings_button,
+                            self.minimize_button, self.close_button):
+            icon_button.update()
         self.build_presets()
         self.scale_clock()
         if self.docked:
@@ -559,10 +582,11 @@ class FloatTimer(QWidget):
         # Use the screen containing the original window (not necessarily primary).
         screen = QApplication.screenAt(self.previous_position) if self.previous_position else None
         screen = screen or self.screen() or QApplication.primaryScreen()
-        rect = screen.availableGeometry()
+        rect = screen.geometry()
         self.scale_clock()
-        self.setFixedSize(self.dock_display.width() + 18, self.dock_display.height() + 18)
-        self.move(rect.x() + (rect.width() - self.width()) // 2, rect.y() + 8)
+        # No outer margin: docked background touches the very top of the screen.
+        self.setFixedSize(self.dock_display.size())
+        self.move(rect.x() + (rect.width() - self.width()) // 2, rect.y())
 
     def toggle_dock(self):
         if not self.docked:
@@ -572,6 +596,7 @@ class FloatTimer(QWidget):
             self.setMinimumSize(0, 0)
             self.setMaximumSize(16777215, 16777215)
             self.panel.hide()
+            self.layout().setContentsMargins(0, 0, 0, 0)
             self.dock_display.show()
             self.adjustSize()
             self.position_docked()
@@ -580,6 +605,7 @@ class FloatTimer(QWidget):
             self.setMinimumSize(0, 0)
             self.setMaximumSize(16777215, 16777215)
             self.dock_display.hide()
+            self.layout().setContentsMargins(9, 9, 9, 9)
             self.panel.show()
             self.scale_clock()
             if self.previous_position is not None:
