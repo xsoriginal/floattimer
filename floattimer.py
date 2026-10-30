@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QPoint, Signal
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPainter, QPixmap, QPen, QBrush, QFontMetrics
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPainter, QPixmap, QPen, QBrush, QFontMetrics, QPainterPath
 from PySide6.QtWidgets import (
     QApplication, QWidget, QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QPushButton, QLabel, QLineEdit, QSpinBox, QDoubleSpinBox, QCheckBox,
@@ -61,9 +61,18 @@ class IconButton(QPushButton):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFixedSize(size, size)
         self.clicked.connect(callback)
+        if kind == "reset":
+            # Native Qt text rendering: avoids the missing R caused by painting
+            # a glyph over the button's style-engine rendering.
+            self.setText("R")
+            font = QFont("Arial", 24, QFont.Weight.Bold)
+            font.setPixelSize(27)
+            self.setFont(font)
 
     def paintEvent(self, event):
         super().paintEvent(event)
+        if self.kind == "reset":
+            return  # QPushButton renders its real text label reliably.
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.translate(self.width() / 2, self.height() / 2)
@@ -107,21 +116,25 @@ class IconButton(QPushButton):
             painter.drawPolygon(QPolygonF([QPointF(0,-15),QPointF(-13,-2),QPointF(-5,-2),QPointF(-5,9),QPointF(5,9),QPointF(5,-2),QPointF(13,-2)]))
             painter.drawRect(-13,13,26,3)
         elif k == "settings":
+            # A single even-odd fill path makes the hole truly transparent,
+            # irrespective of the panel's background colour or opacity.
             from PySide6.QtCore import QRectF
-            for i in range(8):
-                painter.save()
-                painter.rotate(i*45)
-                painter.setBrush(color)
-                painter.setPen(Qt.PenStyle.NoPen)
-                painter.drawRoundedRect(QRectF(-3,-14,6,9),1,1)
-                painter.restore()
-            painter.setBrush(color)
+            from PySide6.QtGui import QPainterPath, QPolygonF
+            from PySide6.QtCore import QPointF
+            import math
+            path = QPainterPath()
+            teeth = []
+            for i in range(32):
+                angle = 2 * math.pi * i / 32 - math.pi / 2
+                radius = 14 if i % 4 in (0, 1) else 10.5
+                teeth.append(QPointF(radius * math.cos(angle), radius * math.sin(angle)))
+            path.addPolygon(QPolygonF(teeth))
+            path.closeSubpath()
+            path.addEllipse(QRectF(-4.5, -4.5, 9, 9))
+            path.setFillRule(Qt.FillRule.OddEvenFill)
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawEllipse(-9,-9,18,18)
-            # Clear the centre using composition rather than painting a fixed colour.
-            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
-            painter.drawEllipse(-4,-4,8,8)
-            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+            painter.setBrush(color)
+            painter.drawPath(path)
         elif k == "minimize":
             painter.drawLine(-10,6,10,6)
         elif k == "close":
@@ -148,6 +161,18 @@ class DragBar(QFrame):
     def mouseReleaseEvent(self, event):
         self.origin = None
         self.parent_window.store_position()
+
+
+def show_front_warning(parent, title, message):
+    """Application-modal, explicitly foregrounded alert above an always-on-top timer."""
+    alert = QMessageBox(QMessageBox.Icon.Warning, title, message,
+                        QMessageBox.StandardButton.Ok, parent)
+    alert.setWindowFlags(alert.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
+    alert.setWindowModality(Qt.WindowModality.ApplicationModal)
+    alert.show()
+    alert.raise_()
+    alert.activateWindow()
+    return alert.exec()
 
 
 class SettingsDialog(QDialog):
@@ -212,7 +237,7 @@ class SettingsDialog(QDialog):
             if not entries or len(entries) > 12 or any(x < 1 or x > 999 for x in entries):
                 raise ValueError()
         except ValueError:
-            QMessageBox.warning(self, "Invalid presets", "Enter 1–12 comma-separated whole numbers between 1 and 999.")
+            show_front_warning(self, "Invalid presets", "Enter 1–12 comma-separated whole numbers between 1 and 999.")
             return
         self.values.update(presets=entries, font=self.font.currentFont().family(),
                            font_size=self.font_size.value(), opacity=self.opacity.value(),
@@ -480,7 +505,7 @@ class FloatTimer(QWidget):
             return
         value = self.time_input.text().strip()
         if len(value) != 4 or not value.isdigit() or int(value[2:]) > 59:
-            QMessageBox.warning(self, "Invalid time", "Enter four digits in MMSS format, e.g. 0530 for 5 minutes 30 seconds.")
+            show_front_warning(self, "Invalid time", "Enter four digits in MMSS format, e.g. 0530 for 5 minutes 30 seconds.")
             self.time_input.setFocus()
             return
         duration = int(value[:2]) * 60 + int(value[2:])
