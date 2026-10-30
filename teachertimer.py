@@ -5,6 +5,10 @@ import os
 import ctypes
 import sys
 import time
+import math
+import wave
+import struct
+import tempfile
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QPoint, QSize, QRectF, Signal, QPropertyAnimation, QEasingCurve, QEvent
@@ -21,8 +25,83 @@ DEFAULT = {
     "presets": [30, 60, 120, 300, 600], "preset_format": 2, "font": "Segoe UI", "font_size": 100,
     "text_color": "#000000", "background_color": "#DDA64B",
     "accent_color": "#43E5AD", "opacity": 95, "always_on_top": True,
-    "sound": True, "start_with_windows": False, "x": None, "y": None, "width": None, "height": None,
+    "sound": True, "alert_sound": "Soft chime", "final_pips": False, "start_with_windows": False, "x": None, "y": None, "width": None, "height": None,
 }
+
+
+# Original, synthesised classroom alert sounds; no external sound files required.
+ALERT_SOUNDS = ("Classic bell", "Soft chime", "Gentle tone", "Digital beep", "Silent")
+_AUDIO_CACHE = {}
+
+
+def _synth_sound(name):
+    """Build a short 16-bit mono WAV in the temporary directory on first use."""
+    if name in _AUDIO_CACHE:
+        return _AUDIO_CACHE[name]
+    rate = 22050
+    length = {"Classic bell": 2.1, "Soft chime": 1.35, "Gentle tone": 1.1,
+              "Digital beep": 0.65, "Final pip": 0.13}.get(name, 0)
+    if not length:
+        return None
+    samples = []
+    for i in range(int(rate * length)):
+        t = i / rate
+        if name == "Classic bell":
+            # Inharmonic partials and individually decaying resonances approximate
+            # a struck brass bell, rather than a pitched electronic sine tone.
+            strike = min(1.0, t / .0025)
+            partials = ((1.0, 1.00, 2.0), (.46, 2.01, 3.2),
+                        (.24, 2.68, 4.7), (.17, 3.91, 6.0),
+                        (.11, 5.43, 8.0), (.08, 6.82, 10.0))
+            fundamental = 740.0
+            signal = strike * sum(
+                amp * math.exp(-decay * t) * math.sin(2 * math.pi * fundamental * ratio * t)
+                for amp, ratio, decay in partials
+            ) * .39
+            # A very brief, soft high-frequency strike gives the bell definition.
+            signal += .065 * math.exp(-85 * t) * math.sin(2 * math.pi * 3900 * t)
+        elif name == "Soft chime":
+            signal = 0
+            for start, freq in ((0, 659.25), (.32, 783.99), (.64, 987.77)):
+                dt = t - start
+                if dt >= 0:
+                    signal += .30 * min(1, dt / .025) * math.exp(-5 * dt) * (math.sin(2 * math.pi * freq * dt) + .12 * math.sin(2 * math.pi * freq * 2 * dt))
+        elif name == "Gentle tone":
+            env = min(1, t / .20, (length - t) / .35)
+            signal = .30 * max(0, env) * (math.sin(2 * math.pi * 523.25 * t) + .14 * math.sin(2 * math.pi * 1046.5 * t))
+        elif name == "Digital beep":
+            pulse = (0 <= t < .16) or (.30 <= t < .46)
+            phase = t if t < .30 else t - .30
+            env = min(1, phase / .012, (.16 - phase) / .025) if pulse else 0
+            signal = .36 * max(0, env) * math.sin(2 * math.pi * 880 * t)
+        else:
+            env = min(1, t / .012, (length - t) / .025)
+            signal = .26 * max(0, env) * math.sin(2 * math.pi * 880 * t)
+        samples.append(struct.pack('<h', int(max(-1, min(1, signal)) * 32767)))
+    folder = Path(tempfile.gettempdir()) / "TeacherTimerSounds"
+    folder.mkdir(parents=True, exist_ok=True)
+    file = folder / (name.lower().replace(' ', '_') + '.wav')
+    with wave.open(str(file), 'wb') as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(rate)
+        wav.writeframes(b''.join(samples))
+    _AUDIO_CACHE[name] = str(file)
+    return str(file)
+
+
+def play_alert_sound(name):
+    if name == "Silent":
+        return
+    try:
+        path = _synth_sound(name)
+        if sys.platform == "win32":
+            import winsound
+            winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
+        else:
+            QApplication.beep()
+    except (OSError, RuntimeError):
+        QApplication.beep()
 
 
 def resource_path(filename):
@@ -201,10 +280,14 @@ def tray_icon():
     return icon
 
 def running_tray_icon():
-    """Colour the existing tray artwork green without changing its silhouette."""
+    """Tint native ICO sizes only, preserving their exact placement and alpha.
+
+    Avoid synthetic 20px artwork: Windows/Qt can choose it instead of the
+    original 16px or 24px ICO frame, changing the apparent scale/alignment.
+    """
     source = tray_icon()
     result = QIcon()
-    for size in (16, 20, 24, 32, 48, 64, 256):
+    for size in (16, 24, 32, 48, 64, 128, 256):
         pixmap = source.pixmap(size, size)
         if pixmap.isNull():
             continue
@@ -495,6 +578,18 @@ class SettingsDialog(QDialog):
         self.sound = QCheckBox("Play alert when finished")
         self.sound.setChecked(settings["sound"])
         form.addRow(self.sound)
+        self.alert_sound = QComboBox()
+        self.alert_sound.addItems(ALERT_SOUNDS)
+        self.alert_sound.setCurrentText(settings.get("alert_sound", "Soft chime"))
+        sound_row = QHBoxLayout()
+        sound_row.addWidget(self.alert_sound, 1)
+        preview = QPushButton("Preview")
+        preview.clicked.connect(lambda: play_alert_sound(self.alert_sound.currentText()))
+        sound_row.addWidget(preview)
+        form.addRow("Completion sound", sound_row)
+        self.final_pips = QCheckBox("Single pip at each of the final 5 seconds")
+        self.final_pips.setChecked(settings.get("final_pips", False))
+        form.addRow(self.final_pips)
         self.startup = QCheckBox("Start Teacher Timer when I sign in to Windows")
         self.startup.setChecked(is_windows_startup_enabled() if sys.platform == "win32" else False)
         self.startup.setEnabled(sys.platform == "win32" and startup_command() is not None)
@@ -540,6 +635,8 @@ class SettingsDialog(QDialog):
         self.opacity.setValue(DEFAULT["opacity"])
         self.top.setChecked(DEFAULT["always_on_top"])
         self.sound.setChecked(DEFAULT["sound"])
+        self.alert_sound.setCurrentText(DEFAULT["alert_sound"])
+        self.final_pips.setChecked(DEFAULT["final_pips"])
         self.startup.setChecked(DEFAULT["start_with_windows"])
         self.restore_top_position = True
         self.accept()
@@ -567,6 +664,7 @@ class SettingsDialog(QDialog):
         self.values.update(presets=entries, preset_format=2, font=self.font.currentFont().family(),
                            opacity=self.opacity.value(),
                            always_on_top=self.top.isChecked(), sound=self.sound.isChecked(),
+                           alert_sound=self.alert_sound.currentText(), final_pips=self.final_pips.isChecked(),
                            start_with_windows=self.startup.isChecked())
         super().accept()
 
@@ -1071,6 +1169,7 @@ class TeacherTimer(QWidget):
         self.deadline = None
         self.running = False
         self.finished = False
+        self.last_pip_second = None
         self.alert_active = False
         self.minimized_to_tray = False
         self.progress_max = 0.0
@@ -1479,6 +1578,7 @@ class TeacherTimer(QWidget):
         self.deadline = None
         self.remaining = float(self.duration)
         self.finished = False
+        self.last_pip_second = None
         self.mark_new_time()
         self.update_tray_icon()
         self.refresh()
@@ -1487,6 +1587,11 @@ class TeacherTimer(QWidget):
         if not self.running:
             return
         self.remaining = max(0.0, self.deadline - time.monotonic())
+        seconds_left = max(0, math.ceil(self.remaining))
+        if (self.settings.get("final_pips", False) and self.running and
+                1 <= seconds_left <= 5 and seconds_left != self.last_pip_second):
+            self.last_pip_second = seconds_left
+            play_alert_sound("Final pip")
         if self.remaining <= 0:
             self.running = False
             self.deadline = None
@@ -1503,7 +1608,7 @@ class TeacherTimer(QWidget):
                 self.restore_finished_alert()
             self.update_tray_icon()
             if self.settings["sound"]:
-                QApplication.beep()
+                play_alert_sound(self.settings.get("alert_sound", "Soft chime"))
             if self.tray.isVisible():
                 self.tray.showMessage("Teacher Timer", "Time's up!", QSystemTrayIcon.MessageIcon.Information, 4000)
         self.refresh()
