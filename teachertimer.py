@@ -280,26 +280,18 @@ def tray_icon():
     return icon
 
 def running_tray_icon():
-    """Tint native ICO sizes only, preserving their exact placement and alpha.
+    """Use a native multi-resolution ICO matching the normal tray icon.
 
-    Avoid synthetic 20px artwork: Windows/Qt can choose it instead of the
-    original 16px or 24px ICO frame, changing the apparent scale/alignment.
+    Qt-generated pixmaps may have different scaling, alignment, or DPI
+    behaviour from Windows' native ICO selection. Both icons must be
+    bundled as ICO resources using the same frame sizes and alpha masks.
     """
-    source = tray_icon()
-    result = QIcon()
-    for size in (16, 24, 32, 48, 64, 128, 256):
-        pixmap = source.pixmap(size, size)
-        if pixmap.isNull():
-            continue
-        tinted = QPixmap(pixmap.size())
-        tinted.fill(Qt.GlobalColor.transparent)
-        painter = QPainter(tinted)
-        painter.drawPixmap(0, 0, pixmap)
-        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
-        painter.fillRect(tinted.rect(), QColor('#43E5AD'))
-        painter.end()
-        result.addPixmap(tinted)
-    return result
+    path = resource_path("TeacherTimer-Tray-Running.ico")
+    if not path.is_file():
+        # Never display a mismatched icon if the optional asset was omitted.
+        return tray_icon()
+    icon = QIcon(str(path))
+    return icon if not icon.isNull() else tray_icon()
 
 
 def button(label, callback, name="control"):
@@ -502,7 +494,7 @@ class SettingsDialog(QDialog):
     def __init__(self, settings, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Teacher Timer settings")
-        self.resize(490, 650)
+        self.resize(490, 683)
         self.values = dict(settings)
         self.restore_top_position = False
         outer = QVBoxLayout(self)
