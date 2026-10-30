@@ -404,7 +404,9 @@ class PresentationWindow(QWidget):
         super().__init__()
         self.timer = timer
         self.settings = timer.settings
-        self.alert_active = timer.finished and timer.remaining <= 0
+        # Only a countdown finishing while fullscreen is open triggers the red alert.
+        # Opening fullscreen at 00:00 must retain the normal background.
+        self.alert_active = False
         self.setWindowTitle('Teacher Timer · Presentation Mode')
         self.setWindowIcon(timer.windowIcon())
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
@@ -589,13 +591,17 @@ class PresentationWindow(QWidget):
         s = self.settings
         background = '#e5404b' if self.alert_active else s['background_color']
         foreground = '#ffffff' if self.alert_active else s['text_color']
+        button_bg = '#a52330' if self.alert_active else 'rgba(130,150,175,45)'
+        button_hover = '#8d1d29' if self.alert_active else 'rgba(130,150,175,95)'
+        play_bg = button_bg if self.alert_active else s['accent_color']
+        top_bg = button_bg if self.alert_active else 'transparent'
         self.setStyleSheet(f"""
             PresentationWindow {{ background: {background}; }}
             QLabel, QPushButton#fullscreenDisplay {{ color: {foreground}; background: transparent; border: none; }}
-            QPushButton {{ background: rgba(130,150,175,45); border: none; border-radius: 14px; }}
-            QPushButton:hover {{ background: rgba(130,150,175,95); }}
-            QPushButton#play {{ background: {s['accent_color']}; }}
-            QPushButton#topButton {{ background: transparent; }}
+            QPushButton {{ background: {button_bg}; border: none; border-radius: 14px; }}
+            QPushButton:hover {{ background: {button_hover}; }}
+            QPushButton#play {{ background: {play_bg}; }}
+            QPushButton#topButton {{ background: {top_bg}; }}
             QLineEdit#fullscreenTimeInput {{ background: rgba(255,255,255,25); color: {foreground}; border: 2px solid {s['accent_color']}; border-radius: 12px; }}
             QPushButton#fullscreenPreset {{ color: {foreground}; }}
             QFrame#instructionsPanel {{ border: 2px solid rgba(255,255,255,160); border-radius: 12px; background: transparent; }}
@@ -662,6 +668,7 @@ class TeacherTimer(QWidget):
         self.deadline = None
         self.running = False
         self.finished = False
+        self.alert_active = False
         self.progress_max = 0.0
         self.progress_started = False
         self.progress_needs_initialising = True
@@ -673,6 +680,7 @@ class TeacherTimer(QWidget):
         self.setWindowIcon(QIcon(str(resource_path("TeacherTimer.ico"))))
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.build_ui()
+        QApplication.instance().installEventFilter(self)
         self.setFixedSize(420, max(190, 58 + len(self.settings["presets"]) * 47))
         self.make_tray()
         self.apply_settings()
@@ -842,6 +850,19 @@ class TeacherTimer(QWidget):
         self.show_normal()
         self.toggle()
 
+    def eventFilter(self, obj, event):
+        if (self.alert_active
+                and event.type() in (QEvent.Type.MouseButtonPress, QEvent.Type.KeyPress)
+                and isinstance(obj, QWidget)
+                and (obj is self or self.isAncestorOf(obj))):
+            self.clear_alert()
+        return super().eventFilter(obj, event)
+
+    def clear_alert(self):
+        if self.alert_active:
+            self.alert_active = False
+            self.apply_settings()
+
     def apply_settings(self):
         s = self.settings
         flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
@@ -849,27 +870,34 @@ class TeacherTimer(QWidget):
             flags |= Qt.WindowType.WindowStaysOnTopHint
         was_visible = self.isVisible()
         self.setWindowFlags(flags)
-        bg = QColor(s["background_color"])
+        bg = QColor("#e5404b" if self.alert_active else s["background_color"])
         bg.setAlphaF(s["opacity"] / 100)
         rgba = f"rgba({bg.red()}, {bg.green()}, {bg.blue()}, {bg.alpha()})"
+        foreground = "#ffffff" if self.alert_active else s["text_color"]
+        button_bg = '#a52330' if self.alert_active else 'rgba(130,150,175,45)'
+        button_hover = '#8d1d29' if self.alert_active else 'rgba(130,150,175,95)'
+        play_bg = button_bg if self.alert_active else s['accent_color']
+        top_bg = button_bg if self.alert_active else 'transparent'
+        selected_bg = button_bg if self.alert_active else s['accent_color']
+        selected_fg = '#ffffff' if self.alert_active else '#101820'
         self.panel.setStyleSheet(f"""
             QFrame#panel {{ background: {rgba}; border-radius: 18px; }}
-            QLabel {{ color: {s['text_color']}; }}
-            QPushButton {{ background: rgba(130,150,175,45); color: {s['text_color']};
+            QLabel {{ color: {foreground}; }}
+            QPushButton {{ background: {button_bg}; color: {foreground};
                           border: none; border-radius: 9px; padding: 7px 11px; }}
-            QPushButton:hover {{ background: rgba(130,150,175,95); }}
-            QLineEdit#timeInput {{ background: rgba(255,255,255,25); color: {s["text_color"]}; border: 2px solid {s["accent_color"]}; border-radius: 8px; }}
+            QPushButton:hover {{ background: {button_hover}; }}
+            QLineEdit#timeInput {{ background: rgba(255,255,255,25); color: {foreground}; border: 2px solid {s["accent_color"]}; border-radius: 8px; }}
             QPushButton#display {{ background: transparent; padding: 0px; }}
-            QPushButton#play {{ background: {s['accent_color']}; color: {s['text_color']}; font-weight: 700; }}
-            QPushButton#presetSelected {{ background: {s['accent_color']}; color: #101820; font-weight: 700; }}
-            QPushButton#topButton {{ background: transparent; padding: 0px; }}
+            QPushButton#play {{ background: {play_bg}; color: {foreground}; font-weight: 700; }}
+            QPushButton#presetSelected {{ background: {selected_bg}; color: {selected_fg}; font-weight: 700; }}
+            QPushButton#topButton {{ background: {top_bg}; padding: 0px; }}
         """)
         # Docked display is a sibling of panel, so style it independently.
-        dock_bg = QColor(s["background_color"])
+        dock_bg = QColor("#e5404b" if self.alert_active else s["background_color"])
         dock_bg.setAlphaF(0.80)
         dock_rgba = f"rgba({dock_bg.red()}, {dock_bg.green()}, {dock_bg.blue()}, {dock_bg.alpha()})"
         self.dock_display.setStyleSheet(
-            f"QPushButton {{ background-color: {dock_rgba}; color: {s['text_color']}; "
+            f"QPushButton {{ background-color: {dock_rgba}; color: {foreground}; "
             "border: none; border-bottom-left-radius: 12px; "
             "border-bottom-right-radius: 12px; padding: 0px; }}"
         )
@@ -949,6 +977,7 @@ class TeacherTimer(QWidget):
 
     def mark_new_time(self):
         """The next Play establishes a new progress maximum."""
+        self.clear_alert()
         self.progress_needs_initialising = True
         self.progress_started = False
         if self.presentation is not None:
@@ -1031,6 +1060,9 @@ class TeacherTimer(QWidget):
             if self.presentation is not None:
                 self.presentation.hide_progress()
                 self.presentation.set_finished_alert()
+            else:
+                self.alert_active = True
+                self.apply_settings()
             if self.settings["sound"]:
                 QApplication.beep()
             if self.tray.isVisible():
@@ -1074,6 +1106,7 @@ class TeacherTimer(QWidget):
             self.apply_settings()
 
     def enter_presentation(self):
+        self.clear_alert()
         if self.presentation is not None:
             return
         if self.docked:
@@ -1117,6 +1150,7 @@ class TeacherTimer(QWidget):
         self.move(rect.x() + (rect.width() - self.width()) // 2, rect.y())
 
     def toggle_dock(self):
+        self.clear_alert()
         if not self.docked:
             self.previous_position = self.pos()
             self.previous_size = self.size()
@@ -1149,6 +1183,7 @@ class TeacherTimer(QWidget):
         save_settings(self.settings)
 
     def show_normal(self):
+        self.clear_alert()
         if self.docked:
             self.toggle_dock()
         self.show()
