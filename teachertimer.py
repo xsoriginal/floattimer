@@ -1,5 +1,6 @@
 """Teacher Timer: compact, customisable, always-on-top countdown for Windows."""
 import json
+import configparser
 import os
 import ctypes
 import sys
@@ -42,6 +43,33 @@ def settings_file():
         folder = Path(__file__).resolve().parent
     return folder / "settings.json"
 
+
+
+def top_position_file():
+    """Top-mode horizontal preference, separate from legacy JSON settings."""
+    return settings_file().with_name("settings.ini")
+
+
+def load_top_position():
+    parser = configparser.ConfigParser()
+    try:
+        parser.read(top_position_file(), encoding="utf-8")
+        return float(parser.get("Top mode", "horizontal_position"))
+    except (OSError, ValueError, configparser.Error):
+        return 0.5
+
+
+def save_top_position(fraction):
+    parser = configparser.ConfigParser()
+    try:
+        parser.read(top_position_file(), encoding="utf-8")
+    except configparser.Error:
+        pass
+    if not parser.has_section("Top mode"):
+        parser.add_section("Top mode")
+    parser.set("Top mode", "horizontal_position", str(max(0., min(1., fraction))))
+    with top_position_file().open("w", encoding="utf-8") as file:
+        parser.write(file)
 
 
 def instructions_file():
@@ -193,9 +221,10 @@ class IconButton(QPushButton):
         window = self.window()
         color = QColor('#ffffff' if getattr(window, 'alert_active', False)
                        else getattr(window, "settings", {}).get("text_color", "#FFFFFF"))
-        if k := self.kind:
-            if k in ('play', 'pause') and not getattr(window, 'alert_active', False):
-                color = QColor(getattr(window, 'settings', {}).get('accent_color', '#43E5AD'))
+        if k in ('play', 'pause') and not getattr(window, 'alert_active', False):
+            accent = QColor(getattr(window, 'settings', {}).get('accent_color', '#43E5AD'))
+            # Keep play/pause visible on both pale and dark accent backgrounds.
+            color = QColor('#101820') if accent.lightnessF() > 0.55 else QColor('#ffffff')
         pen = QPen(color, 3.2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
         painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -364,8 +393,9 @@ class SettingsDialog(QDialog):
     def __init__(self, settings, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Teacher Timer settings")
-        self.resize(490, 588)
+        self.resize(490, 650)
         self.values = dict(settings)
+        self.restore_top_position = False
         outer = QVBoxLayout(self)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -408,7 +438,7 @@ class SettingsDialog(QDialog):
         form = QFormLayout()
         self.font = QFontComboBox()
         self.font.setCurrentFont(QFont(settings["font"]))
-        form.addRow("Countdown font", self.font)
+        form.addRow("Font", self.font)
         self.colors = {}
         self.color_previews = {}
         for key, label in (("text_color", "Text colour"), ("background_color", "Background colour"), ("accent_color", "Accent colour")):
@@ -455,10 +485,38 @@ class SettingsDialog(QDialog):
         copyright_note.setWordWrap(True)
         copyright_note.setStyleSheet("color: #777777; font-size: 11px; padding: 8px 4px 2px;")
         outer.addWidget(copyright_note)
+        restore = QPushButton("Restore Defaults")
+        restore.setToolTip("Reset all preferences, including Top mode position")
+        restore.clicked.connect(self.restore_defaults)
+        outer.addWidget(restore)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         outer.addWidget(buttons)
+
+    def restore_defaults(self):
+        answer = QMessageBox.question(
+            self, "Restore defaults",
+            "Restore all Teacher Timer settings to their defaults?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.values = dict(DEFAULT)
+        for i, (value, unit) in enumerate(self.preset_inputs):
+            seconds = DEFAULT["presets"][i]
+            unit.setCurrentIndex(1 if seconds % 60 == 0 else 0)
+            value.setValue(seconds // 60 if seconds % 60 == 0 else seconds)
+        self.font.setCurrentFont(QFont(DEFAULT["font"]))
+        for key in self.colors:
+            self.colors[key].setText(DEFAULT[key])
+            self.update_color_preview(key)
+        self.opacity.setValue(DEFAULT["opacity"])
+        self.top.setChecked(DEFAULT["always_on_top"])
+        self.sound.setChecked(DEFAULT["sound"])
+        self.startup.setChecked(DEFAULT["start_with_windows"])
+        self.restore_top_position = True
+        self.accept()
 
     def update_color_preview(self, key):
         colour = QColor(self.values[key])
@@ -724,6 +782,9 @@ class PresentationWindow(QWidget):
         font = QFont(self.timer.settings['font'])
         font.setPixelSize(self.instructions_font_size)
         self.instructions_editor.setFont(font)
+        # Placeholder is rendered by the editor using its current font.
+        self.instructions_editor.document().setDefaultFont(font)
+        self.instructions_editor.viewport().update()
 
     def resize_instructions(self, amount):
         self.instructions_font_size = max(14, min(72, self.instructions_font_size + amount))
@@ -806,7 +867,7 @@ class PresentationWindow(QWidget):
         background = '#e5404b' if self.alert_active else s['background_color']
         foreground = '#ffffff' if self.alert_active else s['text_color']
         button_bg, button_hover = themed_button_colours(background)
-        play_bg = button_bg
+        play_bg = button_bg if self.alert_active else s["accent_color"]
         top_bg = 'transparent'
         self.setStyleSheet(f"""
             PresentationWindow {{ background: {background}; }}
@@ -889,6 +950,50 @@ class PresentationWindow(QWidget):
             event.accept()
 
 
+class DraggableTopClock(FixedSlotClock):
+    """Drag horizontally to reposition; a click still restores Float mode."""
+    def __init__(self, label, owner):
+        super().__init__(label)
+        self.owner = owner
+        self.drag_start = None
+        self.start_x = 0
+        self.was_dragged = False
+        self.setCursor(Qt.CursorShape.SizeHorCursor)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.drag_start = event.globalPosition().toPoint()
+            self.start_x = self.owner.x()
+            self.was_dragged = False
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self.drag_start is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            delta = event.globalPosition().toPoint().x() - self.drag_start.x()
+            if abs(delta) >= QApplication.startDragDistance():
+                self.was_dragged = True
+            if self.was_dragged:
+                self.owner.move_top_horizontally(self.start_x + delta)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self.drag_start is not None and event.button() == Qt.MouseButton.LeftButton:
+            dragged = self.was_dragged
+            self.drag_start = None
+            self.was_dragged = False
+            if dragged:
+                self.owner.remember_top_position()
+            else:
+                self.owner.toggle_dock()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+
 class TeacherTimer(QWidget):
     def __init__(self):
         super().__init__()
@@ -903,6 +1008,7 @@ class TeacherTimer(QWidget):
         self.progress_started = False
         self.progress_needs_initialising = True
         self.docked = False
+        self.top_horizontal_fraction = load_top_position()
         self.presentation = None
         self.previous_position = None
         self.previous_size = None
@@ -955,6 +1061,7 @@ class TeacherTimer(QWidget):
         close_button.setToolTip("Exit Teacher Timer")
         bar_layout.addWidget(close_button)
         body.addWidget(bar)
+        body.addSpacing(12)
         main = QHBoxLayout()
         main.setSpacing(10)
         left = QVBoxLayout()
@@ -977,6 +1084,7 @@ class TeacherTimer(QWidget):
         self.time_input.editingFinished.connect(self.commit_time)
         self.display_stack.addWidget(self.time_input)
         left.addWidget(self.display_stack, stretch=1, alignment=Qt.AlignmentFlag.AlignHCenter)
+        left.addSpacing(12)
         controls = QHBoxLayout()
         controls.setSpacing(7)
         self.minus_button = IconButton("minus", lambda: self.adjust_seconds(-30))
@@ -998,10 +1106,9 @@ class TeacherTimer(QWidget):
         self.preset_box.setSpacing(5)
         body.addLayout(self.preset_box)
         # The complete interface is hidden in dock mode, leaving only a clickable time.
-        self.dock_display = FixedSlotClock("05:00")
+        self.dock_display = DraggableTopClock("05:00", self)
         self.dock_display.setObjectName("dockDisplay")
         self.dock_display.setToolTip("Click to restore the full timer")
-        self.dock_display.clicked.connect(self.toggle_dock)
         self.dock_display.hide()
         root.addWidget(self.dock_display)
         self.dock_display.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -1033,7 +1140,7 @@ class TeacherTimer(QWidget):
         left_width = max(clock_width, controls_width)
         presets_width = len(self.settings["presets"]) * 54 + max(0, len(self.settings["presets"]) - 1) * 6
         width = max(left_width, presets_width) + 18 + 28 + 24
-        height = max(190, clock_height + 50 + 43 + 32 + 32)
+        height = max(190, clock_height + 50 + 43 + 32 + 32 + 24)
         if not self.docked:
             self.setFixedSize(width, height)
         # Dock mode has its own constant font size, independent of this setting.
@@ -1109,7 +1216,7 @@ class TeacherTimer(QWidget):
         rgba = f"rgba({bg.red()}, {bg.green()}, {bg.blue()}, {bg.alpha()})"
         foreground = "#ffffff" if self.alert_active else s["text_color"]
         button_bg, button_hover = themed_button_colours('#e5404b' if self.alert_active else s['background_color'])
-        play_bg = button_bg
+        play_bg = button_bg if self.alert_active else s["accent_color"]
         top_bg = 'transparent'
         self.panel.setStyleSheet(f"""
             QFrame#panel {{ background: {rgba}; border-radius: 18px; }}
@@ -1339,6 +1446,9 @@ class TeacherTimer(QWidget):
                 show_front_warning(self, "Windows startup", f"Could not update startup setting: {exc}")
                 return
             self.settings = dialog.values
+            if dialog.restore_top_position:
+                self.top_horizontal_fraction = 0.5
+                save_top_position(0.5)
             save_settings(self.settings)
             self.apply_settings()
 
@@ -1384,7 +1494,21 @@ class TeacherTimer(QWidget):
         self.scale_clock()
         # No outer margin: docked background touches the very top of the screen.
         self.setFixedSize(self.dock_display.size())
-        self.move(rect.x() + (rect.width() - self.width()) // 2, rect.y())
+        travel = max(0, rect.width() - self.width())
+        self.move(rect.x() + round(travel * self.top_horizontal_fraction), rect.y())
+
+    def move_top_horizontally(self, x):
+        screen = self.screen() or QApplication.primaryScreen()
+        rect = screen.geometry()
+        x = max(rect.left(), min(x, rect.right() - self.width() + 1))
+        self.move(x, rect.top())
+
+    def remember_top_position(self):
+        screen = self.screen() or QApplication.primaryScreen()
+        rect = screen.geometry()
+        travel = max(0, rect.width() - self.width())
+        self.top_horizontal_fraction = max(0., min(1., (self.x() - rect.left()) / travel)) if travel else 0.5
+        save_top_position(self.top_horizontal_fraction)
 
     def toggle_dock(self):
         self.clear_alert()
