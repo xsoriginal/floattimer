@@ -553,40 +553,59 @@ class SettingsDialog(QDialog):
 
 
 class ProgressStrip(QWidget):
-    """Full-width countdown progress; height matches the fullscreen play button."""
+    """Flat countdown strip with a short, time-fading trail as it empties."""
     def __init__(self, timer):
         super().__init__()
         self.timer = timer
         self.setFixedHeight(84)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._last_edge = None
+        self._trail = []
+        self._last_colour = None
+        self._last_max = None
+
+    def reset_trail(self):
+        self._last_edge = None
+        self._trail.clear()
+        self._last_colour = None
+        self._last_max = None
 
     def paintEvent(self, event):
         if not self.timer.progress_started or self.timer.remaining <= 0:
+            self.reset_trail()
             return
         maximum = max(0.001, self.timer.progress_max)
         ratio = min(1.0, max(0.0, self.timer.remaining / maximum))
         seconds = self.timer.remaining
         colour = '#e5404b' if seconds <= 10 else '#e5e540' if seconds < 30 else '#43E5AD'
+        edge = self.width() * ratio
+        now = time.monotonic()
+        lifetime = 0.42
+
+        # Remember recently emptied strips, then fade those strips with time.
+        # This is a temporal fade, not a gradient attached to the current edge.
+        if (self._last_edge is None or self._last_max != maximum
+                or self._last_colour != colour or edge > self._last_edge + 0.5):
+            self._trail.clear()
+        elif edge < self._last_edge:
+            self._trail.append((edge, self._last_edge, now))
+        self._last_edge = edge
+        self._last_max = maximum
+        self._last_colour = colour
+        self._trail = [(lo, hi, born) for lo, hi, born in self._trail
+                       if now - born < lifetime and hi > edge]
+
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        # Flat, slightly darkened empty track: no bevels or drop shadows.
         painter.fillRect(self.rect(), QColor(0, 0, 0, 95))
-        fill_end = self.width() * ratio
-        # Feather only the final 12 pixels of the filled section.  The leading
-        # portion remains fully opaque and the end tapers gently into the track.
-        feather = min(12.0, fill_end)
-        solid_end = max(0.0, fill_end - feather)
-        if solid_end > 0:
-            painter.fillRect(QRectF(0, 0, solid_end, self.height()), QColor(colour))
-        if feather > 0:
-            fade = QLinearGradient(solid_end, 0, fill_end, 0)
-            fade.setColorAt(0.0, QColor(colour))
-            fade.setColorAt(1.0, QColor(colour).lighter(100))
-            # Fade alpha rather than colour: the underlying track shows through.
-            tip = QColor(colour)
-            tip.setAlpha(0)
-            fade.setColorAt(1.0, tip)
-            painter.fillRect(QRectF(solid_end, 0, feather, self.height()), fade)
+        if edge > 0:
+            painter.fillRect(QRectF(0, 0, edge, self.height()), QColor(colour))
+        for lo, hi, born in self._trail:
+            left = max(edge, lo)
+            if hi <= left:
+                continue
+            trail_colour = QColor(colour)
+            trail_colour.setAlpha(round(200 * max(0.0, 1.0 - (now - born) / lifetime)))
+            painter.fillRect(QRectF(left, 0, hi - left, self.height()), trail_colour)
         painter.end()
 
 
@@ -626,6 +645,10 @@ class FixedSlotClock(QPushButton):
             rect = QRectF(self.rect())
             path.addRoundedRect(rect, 12, 12)
             painter.fillPath(path, bg)
+            # Top mode is flush against the screen edge: square top corners,
+            # while retaining the rounded lower corners.
+            painter.fillRect(QRectF(rect.left(), rect.top(), rect.width(),
+                                    min(12.0, rect.height())), bg)
         painter.setFont(self.font())
         painter.setPen(self.clock_colour)
         label = self.text()
@@ -795,8 +818,13 @@ class PresentationWindow(QWidget):
         font = QFont(self.timer.settings['font'])
         font.setPixelSize(self.instructions_font_size)
         self.instructions_editor.setFont(font)
-        # Placeholder is rendered by the editor using its current font.
         self.instructions_editor.document().setDefaultFont(font)
+        # Qt draws placeholder text using the editor's styled font. Explicitly
+        # update the widget's font-size rule too, so zoom controls affect the
+        # placeholder even when the parent window has an active stylesheet.
+        self.instructions_editor.setStyleSheet(
+            f"font-size: {self.instructions_font_size}px;"
+        )
         self.instructions_editor.viewport().update()
 
     def resize_instructions(self, amount):
@@ -837,6 +865,7 @@ class PresentationWindow(QWidget):
     def show_progress(self):
         if self.timer.remaining <= 0:
             return
+        self.progress.reset_trail()
         self.progress_animation.stop()
         self.progress_animation.setStartValue(self.progress_effect.opacity())
         self.progress_animation.setEndValue(1.0)
@@ -844,6 +873,7 @@ class PresentationWindow(QWidget):
         self.progress.update()
 
     def hide_progress(self):
+        self.progress.reset_trail()
         self.progress_animation.stop()
         self.progress_effect.setOpacity(0.0)
         self.progress.update()
