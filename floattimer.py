@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QPoint, Signal
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPainter, QPixmap, QPen, QBrush
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPainter, QPixmap, QPen, QBrush, QFontMetrics
 from PySide6.QtWidgets import (
     QApplication, QWidget, QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QPushButton, QLabel, QLineEdit, QSpinBox, QDoubleSpinBox, QCheckBox,
@@ -17,7 +17,7 @@ DEFAULT = {
     "presets": [1, 3, 5, 10, 15], "font": "Segoe UI", "font_size": 100,
     "text_color": "#FFFFFF", "background_color": "#101820",
     "accent_color": "#43E5AD", "opacity": 94, "always_on_top": True,
-    "sound": True, "x": None, "y": None,
+    "sound": True, "x": None, "y": None, "width": None, "height": None,
 }
 
 
@@ -86,10 +86,14 @@ class IconButton(QPushButton):
             painter.drawRect(-9,-11,6,22)
             painter.drawRect(3,-11,6,22)
         elif k == "reset":
-            from PySide6.QtCore import QRectF
-            painter.drawArc(QRectF(-11,-11,22,22), 40*16, 285*16)
-            painter.drawLine(-12,-7,-12,1)
-            painter.drawLine(-12,1,-4,-1)
+            # Conventional, crisp circular reset arrow with an integrated arrowhead.
+            from PySide6.QtCore import QRectF, QPointF
+            from PySide6.QtGui import QPolygonF
+            painter.setPen(QPen(color, 3.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            painter.drawArc(QRectF(-11,-11,22,22), 55*16, 290*16)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(color)
+            painter.drawPolygon(QPolygonF([QPointF(-13,-11), QPointF(-13,1), QPointF(-2,-7)]))
         elif k == "minus":
             painter.drawLine(-10,0,10,0)
         elif k == "plus":
@@ -225,11 +229,23 @@ class FloatTimer(QWidget):
         self.finished = False
         self.docked = False
         self.previous_position = None
+        self.previous_size = None
+        self._resizing = False
+        self._resize_edges = (False, False, False, False)
+        self._resize_start = None
+        self._resize_geometry = None
+        self.setMouseTracking(True)
         self.setWindowTitle("FloatTimer")
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.build_ui()
+        self.setMinimumSize(370, 160)
+        self.resize(420, max(190, 58 + len(self.settings["presets"]) * 47))
         self.make_tray()
         self.apply_settings()
+        if self.settings.get("width") and self.settings.get("height"):
+            self.resize(max(self.minimumWidth(), int(self.settings["width"])),
+                        max(self.minimumHeight(), int(self.settings["height"])))
+            self.scale_clock()
         if self.settings["x"] is not None and self.settings["y"] is not None:
             self.move(int(self.settings["x"]), int(self.settings["y"]))
         self.clock = QTimer(self)
@@ -240,7 +256,7 @@ class FloatTimer(QWidget):
 
     def build_ui(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
+        root.setContentsMargins(9, 9, 9, 9)
         self.panel = QFrame()
         self.panel.setObjectName("panel")
         root.addWidget(self.panel)
@@ -261,14 +277,15 @@ class FloatTimer(QWidget):
         minimize_button = IconButton("minimize", self.hide, "topButton", 32)
         minimize_button.setToolTip("Minimise to tray")
         bar_layout.addWidget(minimize_button)
-        close_button = IconButton("close", self.hide, "topButton", 32)
-        close_button.setToolTip("Hide to tray")
+        close_button = IconButton("close", self.quit_app, "topButton", 32)
+        close_button.setToolTip("Exit FloatTimer")
         bar_layout.addWidget(close_button)
         body.addWidget(bar)
         main = QHBoxLayout()
         main.setSpacing(10)
         left = QVBoxLayout()
         self.display_stack = QStackedWidget()
+        self.display_stack.setMinimumWidth(210)
         self.display = QPushButton("05:00")
         self.display.setObjectName("display")
         self.display.setToolTip("Click to enter four digits as MMSS (e.g. 0530)")
@@ -304,7 +321,6 @@ class FloatTimer(QWidget):
         self.preset_box.setSpacing(4)
         main.addLayout(self.preset_box)
         body.addLayout(main)
-        self.main_controls = QWidget()
         # The complete interface is hidden in dock mode, leaving only a clickable time.
         self.dock_display = QPushButton("05:00")
         self.dock_display.setObjectName("dockDisplay")
@@ -314,6 +330,110 @@ class FloatTimer(QWidget):
         root.addWidget(self.dock_display)
         self.dock_display.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.dock_display.customContextMenuRequested.connect(lambda _: self.toggle_dock())
+
+    def scale_clock(self):
+        """Fit the time to the available space, preserving the chosen font family."""
+        if not hasattr(self, "display"):
+            return
+        family = self.settings["font"]
+        if self.docked:
+            # Three times the normal configured size, constrained by the screen.
+            screen = self.screen() or QApplication.primaryScreen()
+            bounds = screen.availableGeometry()
+            target = min(self.settings["font_size"] * 3, int(bounds.height() * .30))
+            font = QFont(family)
+            font.setBold(True)
+            font.setPixelSize(target)
+            metrics = QFontMetrics(font)
+            text = self.format_time()
+            while target > 20 and metrics.horizontalAdvance(text) + 32 > bounds.width() * .90:
+                target -= 2
+                font.setPixelSize(target)
+                metrics = QFontMetrics(font)
+            self.dock_display.setFont(font)
+            self.dock_display.setFixedSize(metrics.horizontalAdvance(text) + 36, metrics.height() + 24)
+            return
+        width = max(180, self.width() - self.preset_column_width() - 64)
+        height = max(70, self.height() - 120)
+        target = max(24, min(self.settings["font_size"] * 3, height))
+        font = QFont(family)
+        font.setBold(True)
+        text = self.format_time()
+        while target > 24:
+            font.setPixelSize(target)
+            metrics = QFontMetrics(font)
+            if metrics.horizontalAdvance(text) <= width and metrics.height() <= height:
+                break
+            target -= 2
+        font.setPixelSize(target)
+        self.display.setFont(font)
+        self.time_input.setFont(font)
+
+    def preset_column_width(self):
+        return 86
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.scale_clock()
+
+    def _edge_hit(self, point):
+        margin = 9
+        return (point.x() < margin, point.x() >= self.width() - margin,
+                point.y() < margin, point.y() >= self.height() - margin)
+
+    def mousePressEvent(self, event):
+        if not self.docked and event.button() == Qt.MouseButton.LeftButton:
+            edges = self._edge_hit(event.position().toPoint())
+            if any(edges):
+                self._resizing = True
+                self._resize_edges = edges
+                self._resize_start = event.globalPosition().toPoint()
+                self._resize_geometry = self.geometry()
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._resizing:
+            delta = event.globalPosition().toPoint() - self._resize_start
+            r = self._resize_geometry
+            left, right, top, bottom = self._resize_edges
+            x, y, w, h = r.x(), r.y(), r.width(), r.height()
+            if left:
+                x += delta.x(); w -= delta.x()
+            if right:
+                w += delta.x()
+            if top:
+                y += delta.y(); h -= delta.y()
+            if bottom:
+                h += delta.y()
+            if w < self.minimumWidth():
+                if left: x -= self.minimumWidth() - w
+                w = self.minimumWidth()
+            if h < self.minimumHeight():
+                if top: y -= self.minimumHeight() - h
+                h = self.minimumHeight()
+            self.setGeometry(x, y, w, h)
+            event.accept()
+            return
+        if not self.docked:
+            left, right, top, bottom = self._edge_hit(event.position().toPoint())
+            if (left or right) and (top or bottom):
+                cursor = Qt.CursorShape.SizeFDiagCursor if left == top else Qt.CursorShape.SizeBDiagCursor
+            elif left or right:
+                cursor = Qt.CursorShape.SizeHorCursor
+            elif top or bottom:
+                cursor = Qt.CursorShape.SizeVerCursor
+            else:
+                cursor = Qt.CursorShape.ArrowCursor
+            self.setCursor(cursor)
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self._resizing:
+            self._resizing = False
+            self.store_position()
+        super().mouseReleaseEvent(event)
 
     def make_tray(self):
         pixmap = QPixmap(64, 64)
@@ -335,7 +455,7 @@ class FloatTimer(QWidget):
         menu.addAction("Reset", self.reset)
         menu.addAction("Settings", self.open_settings)
         menu.addSeparator()
-        menu.addAction("Quit", QApplication.instance().quit)
+        menu.addAction("Quit", self.quit_app)
         self.tray.setContextMenu(menu)
         self.tray.activated.connect(lambda reason: self.show_normal() if reason == QSystemTrayIcon.ActivationReason.DoubleClick else None)
         if QSystemTrayIcon.isSystemTrayAvailable():
@@ -357,16 +477,15 @@ class FloatTimer(QWidget):
             QPushButton {{ background: rgba(130,150,175,45); color: {s['text_color']};
                           border: none; border-radius: 9px; padding: 7px 11px; }}
             QPushButton:hover {{ background: rgba(130,150,175,95); }}
-            QPushButton#dockDisplay {{ background: {rgba}; color: {s["text_color"]}; border-radius: 12px; font-family: '{s["font"]}'; font-size: {s["font_size"]}px; font-weight: 700; padding: 2px 12px; }}
-            QLineEdit#timeInput {{ background: rgba(255,255,255,25); color: {s["text_color"]}; border: 2px solid {s["accent_color"]}; border-radius: 8px; font-family: '{s["font"]}'; font-size: {s["font_size"]}px; font-weight: 700; }}
-            QPushButton#display {{ background: transparent; font-family: '{s['font']}';
-                          font-size: {s['font_size']}px; font-weight: 700; padding: 0px; }}
+            QPushButton#dockDisplay {{ background: {rgba}; color: {s["text_color"]}; border-radius: 12px; padding: 2px 12px; }}
+            QLineEdit#timeInput {{ background: rgba(255,255,255,25); color: {s["text_color"]}; border: 2px solid {s["accent_color"]}; border-radius: 8px; }}
+            QPushButton#display {{ background: transparent; padding: 0px; }}
             QPushButton#play {{ background: {s['accent_color']}; color: #101820; font-weight: 700; }}
             QPushButton#presetSelected {{ background: {s['accent_color']}; color: #101820; font-weight: 700; }}
             QPushButton#topButton {{ background: transparent; padding: 0px; }}
         """)
         self.build_presets()
-        self.adjustSize()
+        self.scale_clock()
         if self.docked:
             self.position_docked()
         if was_visible:
@@ -380,7 +499,12 @@ class FloatTimer(QWidget):
         self.preset_buttons = []
         for minutes in self.settings["presets"]:
             b = button(f"{minutes}m", lambda _=False, m=minutes: self.select_preset(m), "preset")
-            b.setMinimumWidth(57)
+            font = QFont(self.settings["font"])
+            font.setPixelSize(20)
+            font.setBold(True)
+            b.setFont(font)
+            b.setMinimumWidth(76)
+            b.setMinimumHeight(43)
             self.preset_box.addWidget(b)
             self.preset_buttons.append((minutes, b))
         self.preset_box.addStretch()
@@ -497,6 +621,11 @@ class FloatTimer(QWidget):
 
     def open_settings(self):
         dialog = SettingsDialog(self.settings, self)
+        dialog.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowStaysOnTopHint)
+        dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self.settings = dialog.values
             save_settings(self.settings)
@@ -507,22 +636,28 @@ class FloatTimer(QWidget):
         screen = QApplication.screenAt(self.previous_position) if self.previous_position else None
         screen = screen or self.screen() or QApplication.primaryScreen()
         rect = screen.availableGeometry()
+        self.scale_clock()
         self.adjustSize()
         self.move(rect.x() + (rect.width() - self.width()) // 2, rect.y() + 8)
 
     def toggle_dock(self):
         if not self.docked:
             self.previous_position = self.pos()
+            self.previous_size = self.size()
             self.docked = True
+            self.setMinimumSize(0, 0)
             self.panel.hide()
             self.dock_display.show()
             self.adjustSize()
             self.position_docked()
         else:
             self.docked = False
+            self.setMinimumSize(370, 160)
             self.dock_display.hide()
             self.panel.show()
-            self.adjustSize()
+            if self.previous_size is not None:
+                self.resize(self.previous_size)
+            self.scale_clock()
             if self.previous_position is not None:
                 self.move(self.previous_position)
             self.store_position()
@@ -533,6 +668,8 @@ class FloatTimer(QWidget):
             return
         self.settings["x"] = self.x()
         self.settings["y"] = self.y()
+        self.settings["width"] = self.width()
+        self.settings["height"] = self.height()
         save_settings(self.settings)
 
     def show_normal(self):
@@ -542,13 +679,13 @@ class FloatTimer(QWidget):
         self.raise_()
         self.activateWindow()
 
+    def quit_app(self):
+        self.store_position()
+        QApplication.instance().quit()
+
     def closeEvent(self, event):
         self.store_position()
-        if self.tray.isVisible():
-            event.ignore()
-            self.hide()
-        else:
-            event.accept()
+        event.accept()
 
 
 def main():
