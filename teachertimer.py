@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QApplication, QWidget, QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QPushButton, QLabel, QLineEdit, QSpinBox, QDoubleSpinBox, QCheckBox,
     QColorDialog, QFontComboBox, QDialogButtonBox, QSystemTrayIcon, QMenu,
-    QMessageBox, QScrollArea, QFrame, QStackedWidget
+    QMessageBox, QScrollArea, QFrame, QStackedWidget, QSizePolicy
 )
 
 DEFAULT = {
@@ -128,18 +128,9 @@ class IconButton(QPushButton):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFixedSize(size, size)
         self.clicked.connect(callback)
-        if kind == "reset":
-            # Native Qt text rendering: avoids the missing R caused by painting
-            # a glyph over the button's style-engine rendering.
-            self.setText("R")
-            font = QFont("Arial", 24, QFont.Weight.Bold)
-            font.setPixelSize(27)
-            self.setFont(font)
 
     def paintEvent(self, event):
         super().paintEvent(event)
-        if self.kind == "reset":
-            return  # QPushButton renders its real text label reliably.
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.translate(self.width() / 2, self.height() / 2)
@@ -163,13 +154,19 @@ class IconButton(QPushButton):
             painter.drawRect(-9,-11,6,22)
             painter.drawRect(3,-11,6,22)
         elif k == "reset":
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(color)
-            letter = QFont("Arial", 28, QFont.Weight.Bold)
-            letter.setPixelSize(28)
-            painter.setFont(letter)
-            from PySide6.QtCore import QRectF
-            painter.drawText(QRectF(-20, -20, 40, 40), Qt.AlignmentFlag.AlignCenter, "R")
+            # Anticlockwise reset arrow, in the same line-art style as other controls.
+            from PySide6.QtCore import QRectF, QPointF
+            painter.drawArc(QRectF(-12, -12, 24, 24), 30 * 16, 290 * 16)
+            painter.drawLine(QPointF(-12, -3), QPointF(-13, -12))
+            painter.drawLine(QPointF(-12, -3), QPointF(-3, -5))
+        elif k in ("fullscreen", "exit_fullscreen"):
+            # Four clean square corners; exit points the brackets inward.
+            d = 9 if k == "fullscreen" else 5
+            edge = 15
+            for sx in (-1, 1):
+                for sy in (-1, 1):
+                    painter.drawLine(sx * d, sy * edge, sx * edge, sy * edge)
+                    painter.drawLine(sx * edge, sy * d, sx * edge, sy * edge)
         elif k == "minus":
             painter.drawLine(-10,0,10,0)
         elif k == "plus":
@@ -337,6 +334,93 @@ class SettingsDialog(QDialog):
         super().accept()
 
 
+class PresentationWindow(QWidget):
+    """Fullscreen view sharing the main timer's state and icon drawing."""
+    def __init__(self, timer):
+        super().__init__()
+        self.timer = timer
+        self.settings = timer.settings
+        self.setWindowTitle("Teacher Timer · Presentation Mode")
+        self.setWindowIcon(timer.windowIcon())
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(36, 24, 36, 36)
+        top = QHBoxLayout()
+        top.addStretch()
+        self.exit_button = IconButton("exit_fullscreen", timer.exit_presentation, "topButton", 48)
+        self.exit_button.setToolTip("Exit fullscreen (Esc or F11)")
+        top.addWidget(self.exit_button)
+        layout.addLayout(top)
+        layout.addStretch(2)
+        self.display = QLabel()
+        self.display.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.display.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        layout.addWidget(self.display, 5)
+        layout.addStretch(1)
+        controls = QHBoxLayout()
+        controls.setSpacing(18)
+        controls.addStretch()
+        self.minus_button = IconButton("minus", lambda: timer.adjust_seconds(-30), size=72)
+        self.play_button = IconButton("play", timer.toggle, "play", 84)
+        self.reset_button = IconButton("reset", timer.reset, size=72)
+        self.plus_button = IconButton("plus", lambda: timer.adjust_seconds(30), size=72)
+        for b in (self.minus_button, self.play_button, self.reset_button, self.plus_button):
+            controls.addWidget(b)
+        controls.addStretch()
+        layout.addLayout(controls)
+        layout.addStretch(1)
+        self.apply_theme()
+
+    def apply_theme(self):
+        self.settings = self.timer.settings
+        s = self.settings
+        self.setStyleSheet(f"""
+            QWidget {{ background: {s['background_color']}; }}
+            QLabel {{ color: {s['text_color']}; background: transparent; }}
+            QPushButton {{ background: rgba(130,150,175,45); border: none; border-radius: 14px; }}
+            QPushButton:hover {{ background: rgba(130,150,175,95); }}
+            QPushButton#play {{ background: {s['accent_color']}; }}
+            QPushButton#topButton {{ background: transparent; }}
+        """)
+        self.update_clock()
+
+    def update_clock(self):
+        label = self.timer.format_time()
+        self.display.setText(label)
+        font = QFont(self.settings['font'])
+        font.setBold(True)
+        # Fit the digits to the actual available display width and height.
+        available_width = max(100, self.width() - 100)
+        available_height = max(100, self.height() * 0.50)
+        size = max(30, min(int(available_height), 500))
+        font.setPixelSize(size)
+        while size > 30 and QFontMetrics(font).horizontalAdvance(label) > available_width:
+            size -= 4
+            font.setPixelSize(size)
+        self.display.setFont(font)
+        self.play_button.kind = "pause" if self.timer.running else "play"
+        self.play_button.update()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.update_clock()
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key.Key_Escape, Qt.Key.Key_F11):
+            self.timer.exit_presentation()
+        elif event.key() == Qt.Key.Key_Space:
+            self.timer.toggle()
+        else:
+            super().keyPressEvent(event)
+
+    def closeEvent(self, event):
+        if self.timer.presentation is self:
+            event.ignore()
+            self.timer.exit_presentation()
+        else:
+            event.accept()
+
+
 class TeacherTimer(QWidget):
     def __init__(self):
         super().__init__()
@@ -347,6 +431,7 @@ class TeacherTimer(QWidget):
         self.running = False
         self.finished = False
         self.docked = False
+        self.presentation = None
         self.previous_position = None
         self.previous_size = None
         self.setWindowTitle("Teacher Timer")
@@ -381,6 +466,9 @@ class TeacherTimer(QWidget):
         self.dock_button = IconButton("dock", self.toggle_dock, "topButton", 38)
         self.dock_button.setToolTip("Dock at top centre (click time to restore)")
         bar_layout.addWidget(self.dock_button)
+        self.fullscreen_button = IconButton("fullscreen", self.enter_presentation, "topButton", 32)
+        self.fullscreen_button.setToolTip("Presentation Mode (F11)")
+        bar_layout.addWidget(self.fullscreen_button)
         settings_button = IconButton("settings", self.open_settings, "topButton", 32)
         self.settings_button = settings_button
         settings_button.setToolTip("Settings")
@@ -537,10 +625,12 @@ class TeacherTimer(QWidget):
         )
         for icon_button in (self.dock_button, self.play_button, self.reset_button,
                             self.minus_button, self.plus_button, self.settings_button,
-                            self.minimize_button, self.close_button):
+                            self.minimize_button, self.close_button, self.fullscreen_button):
             icon_button.update()
         self.build_presets()
         self.scale_clock()
+        if self.presentation is not None:
+            self.presentation.apply_theme()
         if self.docked:
             self.position_docked()
         if was_visible:
@@ -684,6 +774,8 @@ class TeacherTimer(QWidget):
             b.style().unpolish(b)
             b.style().polish(b)
         self.setWindowTitle(f"{label} · Teacher Timer")
+        if self.presentation is not None:
+            self.presentation.update_clock()
 
     def open_settings(self):
         dialog = SettingsDialog(self.settings, self)
@@ -701,6 +793,38 @@ class TeacherTimer(QWidget):
             self.settings = dialog.values
             save_settings(self.settings)
             self.apply_settings()
+
+    def enter_presentation(self):
+        if self.presentation is not None:
+            return
+        if self.docked:
+            self.toggle_dock()
+        screen = self.screen() or QApplication.primaryScreen()
+        self.presentation = PresentationWindow(self)
+        self.hide()
+        self.presentation.setGeometry(screen.geometry())
+        self.presentation.showFullScreen()
+        self.presentation.raise_()
+        self.presentation.activateWindow()
+
+    def exit_presentation(self):
+        if self.presentation is None:
+            return
+        presentation = self.presentation
+        self.presentation = None
+        presentation.hide()
+        presentation.deleteLater()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_F11:
+            self.enter_presentation()
+        elif event.key() == Qt.Key.Key_Space:
+            self.toggle()
+        else:
+            super().keyPressEvent(event)
 
     def position_docked(self):
         # Use the screen containing the original window (not necessarily primary).
@@ -752,6 +876,8 @@ class TeacherTimer(QWidget):
         self.activateWindow()
 
     def quit_app(self):
+        if self.presentation is not None:
+            self.exit_presentation()
         self.store_position()
         QApplication.instance().quit()
 
