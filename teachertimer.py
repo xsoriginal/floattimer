@@ -175,21 +175,15 @@ class IconButton(QPushButton):
             painter.drawRect(-9,-11,6,22)
             painter.drawRect(3,-11,6,22)
         elif k == "reset":
-            # Open circular arrow with a distinct arrowhead at the upper-left.
-            # Draw the arc and arrowhead separately to avoid the overlapping
-            # strokes that distorted the previous reset symbol.
+            # Qt angles are in sixteenths of a degree. The 50-degree opening
+            # remains centred at 9 o'clock; the arrowhead is two OPEN strokes.
             from PySide6.QtCore import QRectF, QPointF
-            from PySide6.QtGui import QPolygonF
-            # The 50-degree gap is centred on the LEFT (9 o'clock).
-            # Preserve the existing arrowhead geometry below.
             painter.drawArc(QRectF(-11, -11, 22, 22), 205 * 16, 310 * 16)
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(color)
-            painter.drawPolygon(QPolygonF([
-                QPointF(-12.8, -10.2),
-                QPointF(-12.3, -1.6),
-                QPointF(-5.0, -7.0),
-            ]))
+            # The arc ends at 155 degrees, near (-9.97, -4.65).
+            # Draw the two arms into that endpoint, without a filled triangle.
+            tip = QPointF(-9.97, -4.65)
+            painter.drawLine(QPointF(-10.5, -11.0), tip)
+            painter.drawLine(tip, QPointF(-3.7, -7.4))
         elif k in ("fullscreen", "exit_fullscreen"):
             # Four clean square corners; exit points the brackets inward.
             d = 9 if k == "fullscreen" else 5
@@ -437,7 +431,8 @@ class PresentationWindow(QWidget):
         self.exit_button.setToolTip('Exit fullscreen (Esc or F11)')
         top.addWidget(self.exit_button)
         layout.addLayout(top)
-        layout.addStretch(2)
+        # Keep the instructions panel tall, between the top toolbar and bottom controls.
+        layout.addSpacing(14)
 
         self.content_row = QHBoxLayout()
         self.content_row.setContentsMargins(32, 0, 32, 0)
@@ -466,7 +461,7 @@ class PresentationWindow(QWidget):
         panel_layout.setSpacing(12)
         self.instructions_editor = QPlainTextEdit()
         self.instructions_editor.setObjectName('instructionsEditor')
-        self.instructions_editor.setPlaceholderText('Instructions for students…')
+        self.instructions_editor.setPlaceholderText('Intructions...')
         self.instructions_editor.setPlainText(load_instructions())
         self.instructions_font_size = 26  # One step above the 22px preset font.
         self.apply_instructions_font()
@@ -483,10 +478,12 @@ class PresentationWindow(QWidget):
         self.text_larger.setToolTip('Increase instruction text size')
         self.text_clear.setToolTip('Clear instructions')
         panel_layout.addLayout(tools)
-        self.content_row.addWidget(self.instructions_panel, 1)
+        self.content_row.addWidget(self.instructions_panel, 0)
+        # Fixed panel width: changes to countdown text must not change its width.
+        self.instructions_panel.setFixedWidth(max(240, round(self.width() * .25)))
         self.instructions_panel.hide()
-        layout.addLayout(self.content_row, 5)
-        layout.addStretch(2)
+        layout.addLayout(self.content_row, 1)
+        layout.addSpacing(18)
 
         bottom = QHBoxLayout()
         bottom.setContentsMargins(36, 0, 36, 0)
@@ -514,6 +511,7 @@ class PresentationWindow(QWidget):
         QApplication.instance().installEventFilter(self)
 
     def toggle_instructions(self):
+        self.instructions_panel.setFixedWidth(max(240, round(self.width() * .25)))
         self.instructions_panel.setVisible(not self.instructions_panel.isVisible())
         self.update_clock()
 
@@ -632,6 +630,7 @@ class PresentationWindow(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self.instructions_panel.setFixedWidth(max(240, round(self.width() * .25)))
         self.update_clock()
 
     def keyPressEvent(self, event):
