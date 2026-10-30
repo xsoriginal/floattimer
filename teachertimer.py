@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QApplication, QWidget, QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QPushButton, QLabel, QLineEdit, QSpinBox, QDoubleSpinBox, QCheckBox,
     QColorDialog, QFontComboBox, QDialogButtonBox, QSystemTrayIcon, QMenu,
-    QMessageBox, QScrollArea, QFrame, QStackedWidget, QSizePolicy, QGraphicsOpacityEffect
+    QMessageBox, QScrollArea, QFrame, QStackedWidget, QSizePolicy, QGraphicsOpacityEffect, QPlainTextEdit
 )
 
 DEFAULT = {
@@ -42,6 +42,25 @@ def settings_file():
         folder = Path(__file__).resolve().parent
     return folder / "settings.json"
 
+
+
+def instructions_file():
+    """Editable classroom instructions beside the executable."""
+    return settings_file().with_name("instructions.txt")
+
+
+def clear_instructions_file():
+    try:
+        instructions_file().write_text("", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def load_instructions():
+    try:
+        return instructions_file().read_text(encoding="utf-8")
+    except OSError:
+        return ""
 
 
 def load_settings():
@@ -161,12 +180,9 @@ class IconButton(QPushButton):
             # strokes that distorted the previous reset symbol.
             from PySide6.QtCore import QRectF, QPointF
             from PySide6.QtGui import QPolygonF
-            # Mirror only the arc: the gap belongs on the LEFT.
-            # Leave the existing arrowhead geometry completely unchanged.
-            painter.save()
-            painter.scale(-1, 1)
-            painter.drawArc(QRectF(-11, -11, 22, 22), 140 * 16, 285 * 16)
-            painter.restore()
+            # The 50-degree gap is centred on the LEFT (9 o'clock).
+            # Preserve the existing arrowhead geometry below.
+            painter.drawArc(QRectF(-11, -11, 22, 22), 205 * 16, 310 * 16)
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(color)
             painter.drawPolygon(QPolygonF([
@@ -182,6 +198,18 @@ class IconButton(QPushButton):
                 for sy in (-1, 1):
                     painter.drawLine(sx * d, sy * edge, sx * edge, sy * edge)
                     painter.drawLine(sx * edge, sy * d, sx * edge, sy * edge)
+        elif k == "textbox":
+            from PySide6.QtCore import QRectF
+            painter.drawRoundedRect(QRectF(-14, -11, 28, 22), 2, 2)
+            painter.drawLine(-8, -4, 8, -4)
+            painter.drawLine(-8, 3, 5, 3)
+        elif k == "trash":
+            from PySide6.QtCore import QRectF
+            painter.drawLine(-10, -9, 10, -9)
+            painter.drawLine(-4, -13, 4, -13)
+            painter.drawRoundedRect(QRectF(-8, -6, 16, 19), 1, 1)
+            painter.drawLine(-3, -2, -3, 8)
+            painter.drawLine(3, -2, 3, 8)
         elif k == "minus":
             painter.drawLine(-10,0,10,0)
         elif k == "plus":
@@ -242,29 +270,31 @@ class DragBar(QFrame):
 
 
 def show_front_warning(parent, title, message):
-    """Show validation errors above the frameless, always-on-top timer on Windows."""
-    # A parented QMessageBox can sit behind a Qt.Tool always-on-top window.
-    # Give it its own top-level window and explicitly keep it above the timer.
-    alert = QMessageBox(QMessageBox.Icon.Warning, title, message,
-                        QMessageBox.StandardButton.Ok, None)
-    alert.setWindowFlags(
-        Qt.WindowType.Dialog
-        | Qt.WindowType.WindowStaysOnTopHint
-        | Qt.WindowType.WindowTitleHint
-        | Qt.WindowType.WindowCloseButtonHint
-    )
-    alert.setWindowModality(Qt.WindowModality.ApplicationModal)
-    alert.adjustSize()
-    if parent is not None:
-        centre = parent.frameGeometry().center()
-        alert.move(centre.x() - alert.width() // 2,
-                   centre.y() - alert.height() // 2)
+    """Keep validation dialogs in front of the timer, including on Windows."""
+    # Use a real parent-owned dialog, not an independent top-level window.
+    # Temporarily remove the owner's always-on-top status while the dialog
+    # is open: a topmost Qt.Tool can otherwise cover a separate message box.
+    owner = parent.window() if parent is not None else None
+    was_topmost = bool(owner.windowFlags() & Qt.WindowType.WindowStaysOnTopHint) if owner else False
+    if owner and was_topmost:
+        owner.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, False)
+        owner.show()
 
-    def bring_to_front():
+    try:
+        alert = QMessageBox(QMessageBox.Icon.Warning, title, message,
+                            QMessageBox.StandardButton.Ok, owner)
+        alert.setWindowModality(Qt.WindowModality.ApplicationModal)
+        alert.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        alert.adjustSize()
+        if owner is not None:
+            centre = owner.frameGeometry().center()
+            alert.move(centre.x() - alert.width() // 2,
+                       centre.y() - alert.height() // 2)
+
+        alert.show()
         alert.raise_()
         alert.activateWindow()
         if sys.platform == "win32":
-            # Force the native dialog above the timer's topmost tool window.
             HWND_TOPMOST = -1
             SWP_NOMOVE = 0x0002
             SWP_NOSIZE = 0x0001
@@ -273,9 +303,12 @@ def show_front_warning(parent, title, message):
                 int(alert.winId()), HWND_TOPMOST, 0, 0, 0, 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW
             )
-
-    QTimer.singleShot(0, bring_to_front)
-    return alert.exec()
+        return alert.exec()
+    finally:
+        if owner and was_topmost:
+            owner.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+            owner.show()
+            owner.raise_()
 
 
 class SettingsDialog(QDialog):
@@ -397,12 +430,18 @@ class PresentationWindow(QWidget):
         top = QHBoxLayout()
         top.setContentsMargins(30, 10, 30, 0)
         top.addStretch()
+        self.instructions_toggle = IconButton('textbox', self.toggle_instructions, 'topButton', 48)
+        self.instructions_toggle.setToolTip('Show or hide student instructions')
+        top.addWidget(self.instructions_toggle)
         self.exit_button = IconButton('exit_fullscreen', timer.exit_presentation, 'topButton', 48)
         self.exit_button.setToolTip('Exit fullscreen (Esc or F11)')
         top.addWidget(self.exit_button)
         layout.addLayout(top)
         layout.addStretch(2)
 
+        self.content_row = QHBoxLayout()
+        self.content_row.setContentsMargins(32, 0, 32, 0)
+        self.content_row.setSpacing(24)
         self.display_stack = QStackedWidget()
         self.display = QPushButton()
         self.display.setObjectName('fullscreenDisplay')
@@ -418,7 +457,35 @@ class PresentationWindow(QWidget):
         self.time_input.returnPressed.connect(self.commit_time)
         self.display_stack.addWidget(self.time_input)
         self.display_stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        layout.addWidget(self.display_stack, 5)
+        self.content_row.addWidget(self.display_stack, 3)
+
+        self.instructions_panel = QFrame()
+        self.instructions_panel.setObjectName('instructionsPanel')
+        panel_layout = QVBoxLayout(self.instructions_panel)
+        panel_layout.setContentsMargins(16, 16, 16, 12)
+        panel_layout.setSpacing(12)
+        self.instructions_editor = QPlainTextEdit()
+        self.instructions_editor.setObjectName('instructionsEditor')
+        self.instructions_editor.setPlaceholderText('Instructions for students…')
+        self.instructions_editor.setPlainText(load_instructions())
+        self.instructions_font_size = 26  # One step above the 22px preset font.
+        self.apply_instructions_font()
+        self.instructions_editor.textChanged.connect(self.save_instructions)
+        panel_layout.addWidget(self.instructions_editor, 1)
+        tools = QHBoxLayout()
+        tools.addStretch()
+        self.text_smaller = IconButton('minus', lambda: self.resize_instructions(-2), size=44)
+        self.text_larger = IconButton('plus', lambda: self.resize_instructions(2), size=44)
+        self.text_clear = IconButton('trash', self.clear_instructions, size=44)
+        for control in (self.text_smaller, self.text_larger, self.text_clear):
+            tools.addWidget(control)
+        self.text_smaller.setToolTip('Decrease instruction text size')
+        self.text_larger.setToolTip('Increase instruction text size')
+        self.text_clear.setToolTip('Clear instructions')
+        panel_layout.addLayout(tools)
+        self.content_row.addWidget(self.instructions_panel, 1)
+        self.instructions_panel.hide()
+        layout.addLayout(self.content_row, 5)
         layout.addStretch(2)
 
         bottom = QHBoxLayout()
@@ -445,6 +512,28 @@ class PresentationWindow(QWidget):
         layout.addLayout(bottom)
         self.apply_theme()
         QApplication.instance().installEventFilter(self)
+
+    def toggle_instructions(self):
+        self.instructions_panel.setVisible(not self.instructions_panel.isVisible())
+        self.update_clock()
+
+    def apply_instructions_font(self):
+        font = QFont(self.timer.settings['font'])
+        font.setPixelSize(self.instructions_font_size)
+        self.instructions_editor.setFont(font)
+
+    def resize_instructions(self, amount):
+        self.instructions_font_size = max(14, min(72, self.instructions_font_size + amount))
+        self.apply_instructions_font()
+
+    def save_instructions(self):
+        try:
+            instructions_file().write_text(self.instructions_editor.toPlainText(), encoding='utf-8')
+        except OSError:
+            pass
+
+    def clear_instructions(self):
+        self.instructions_editor.clear()
 
     def eventFilter(self, obj, event):
         if self.alert_active and event.type() in (QEvent.Type.MouseButtonPress, QEvent.Type.KeyPress):
@@ -511,10 +600,15 @@ class PresentationWindow(QWidget):
             QPushButton#topButton {{ background: transparent; }}
             QLineEdit#fullscreenTimeInput {{ background: rgba(255,255,255,25); color: {foreground}; border: 2px solid {s['accent_color']}; border-radius: 12px; }}
             QPushButton#fullscreenPreset {{ color: {foreground}; }}
+            QFrame#instructionsPanel {{ border: 2px solid rgba(255,255,255,160); border-radius: 12px; background: transparent; }}
+            QPlainTextEdit#instructionsEditor {{ color: {foreground}; background: transparent; border: none; selection-background-color: {s['accent_color']}; }}
+
         """)
+        self.apply_instructions_font()
         self.update_clock()
         self.update()
-        for control in (self.minus_button, self.play_button, self.reset_button,
+        for control in (self.instructions_toggle, self.text_smaller, self.text_larger, self.text_clear,
+                        self.minus_button, self.play_button, self.reset_button,
                         self.plus_button, self.exit_button):
             control.update()
 
@@ -523,8 +617,8 @@ class PresentationWindow(QWidget):
         self.display.setText(label)
         font = QFont(self.settings['font'])
         font.setBold(True)
-        available_width = max(100, self.width() - 100)
-        available_height = max(100, self.height() * .45)
+        available_width = max(100, self.display_stack.width() - 64)
+        available_height = max(100, self.display_stack.height() * .8)
         size = max(30, min(int(available_height), 500))
         font.setPixelSize(size)
         while size > 30 and QFontMetrics(font).horizontalAdvance(label) > available_width:
@@ -1122,6 +1216,7 @@ def main():
             return
 
     timer = TeacherTimer()
+    app.aboutToQuit.connect(clear_instructions_file)
 
     def accept_activation():
         while server.hasPendingConnections():
