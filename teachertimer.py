@@ -9,10 +9,13 @@ import math
 import wave
 import struct
 import tempfile
+import base64
+import zlib
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, QPoint, QSize, QRectF, Signal, QPropertyAnimation, QEasingCurve, QEvent
+from PySide6.QtCore import Qt, QTimer, QPoint, QSize, QRectF, Signal, QPropertyAnimation, QEasingCurve, QEvent, QUrl
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
+from PySide6.QtMultimedia import QSoundEffect
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPainter, QPixmap, QPen, QBrush, QFontMetrics, QPainterPath, QLinearGradient
 from PySide6.QtWidgets import (
     QApplication, QWidget, QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
@@ -30,7 +33,7 @@ DEFAULT = {
 
 
 # Original, synthesised classroom alert sounds; no external sound files required.
-ALERT_SOUNDS = ("Bell", "Double Beep", "Playful Upward")
+ALERT_SOUNDS = ("Bell", "Double Beep", "Playful Upward", "Confetti Pop")
 _AUDIO_CACHE = {}
 
 
@@ -93,6 +96,234 @@ def _synth_sound(name):
         wav.writeframes(b''.join(samples))
     _AUDIO_CACHE[name] = str(file)
     return str(file)
+
+
+# User-provided cork-pop recording, converted losslessly to WAV for Qt playback.
+# Compressed and embedded so the single Python file works without extra assets.
+_CORK_WAV_ZLIB_B64 = (
+    'eNrtvQd4FUX7Nj6ze0pOGiGB0AkdAkqXIk06KEWKgIJUERAVVHovitKkiYoCAkoHkd4MRUB6BymhdxJaes7Z3Znv3tk9LQmo7+/9'
+    'vuv3v/7ZuU4/Z2fmmfu5n/uZszvbtnmTJkdWEtKxfofG7380qEgYIYSiFOtASKM1hEgkjLRo3q59frzfvFWT1s3bNWkfguctegx5'
+    'v1ql8tXLV6pYhZD3egzq8Tn2kr1lb9lb9pa9ZW/ZW/aWvWVv2dv/po3zv3/n/3s9Mm7/zc13v/++TfRf9yHrjYnifvxn5Xn9ybqd'
+    '/678Xduzao+GYtxnLkzc/r4X/7N2Zx6P57VY+9cl61a/qK2S5+ZbXmTtrNpq1K4+tyiiuF8Z383Y7sytdbdQL3KmYvEUOYvi7UVG'
+    'S7vbm1UbXX5FMYv/e94++LfeaLGUoRjttIpiMx+tntd6sYt74x2L+W1vzySzB14eMPqgeazqbafxyomSLorTpxcZ++BFi28PqE+b'
+    'ZZ+bu/UBaK3d0+oA8WjHY6D53Ga23u75hf6e0Qe93XpNBofptXKPL+r1p3N9fseFd/UeJKMoPA3vJuOViluaaLmTp5ivk3AjJJkn'
+    '8if8Kb73mN/D42N8L4k/w69S8d5T8d1E1GBBCxiXsf8AUQfjek8taF0kKUpyk/wkBLcAEo6bgwTj23a00UrykVCSk+SAFfRfBxDd'
+    'kkEknVOSgvqSeTy/we/ww/wu6jzHL/Nb2PNjHoc2PMH9I7z/lF/Ed+6ipPEr/DS/hFf7+VG04RR+cRW/uYIW2kgiWnQTPcpBruP1'
+    'PX4bv7uG/e3H8yeoR8PrE6jlGX+Ior/3F9+D/lnIFbzeyGPwLIzotV1G6yLJDnz7PD/Gt6KuC/huAqwXQsqgDynoVzCJxbdO8li+'
+    'lB/Abz/ns3ht3okv4sv5MP4u9r+Oz+CbcL8Qn+3ns/lb/Ds+kL+Gb1XmI/kbPAd+V5r35YyNwzeT2FrehZfgP/E1fAze7con83zo'
+    'XUf+AV/MH7HlfAjPiVbE8UaooxrXMZEfY3OIlSHxfALfi3ob8q94Ffy2KPmSb2Cf4PMrrA/sUpLPZW/yQfQR+5K/SyqT4SReO0hK'
+    '0peYhXckMksgV7TjWkV+UFvAprOh2m02j2zmg3kj9hbbpEVpbbV9rq7aSZei/KEtYnO0PVqUOk+NdjV0NWbtFUmLYI9cOZ0H+RlX'
+    'fHIx51tKSaWY0ib9d2Wc8oerQfpbSmXnkaTD2jO1E2xVWivEjsmr+QjynqWO7WDgcQcLrh0aHdwtYmFY29Avwv/MpeU+mztf1N2o'
+    'l4veKvFl2cel9r5cvNK4yotfmV3ptyrzKx+uGFuxbfnL5XuUu1QusVy5sv2jn5SpGn2hVHrJkqVWlDhRvGzxVcWqFLtQfEixlKg2'
+    'Uen5b+SJCCklBSgpCefvh14rc6bL/pMx8Vv55iqbt24stnn9pqAtM7Yc3Pr69jY7fvx9Q8zd3b/t3rH71t4C+2rta3Tg0z+rHhxz'
+    '6MnhU8dizh653uxZAd42Z7uipcq/XSOldpm6c+vOr5NQ626tD18NeXV3jTo1blVbWa1x1fcr56rSsuqdylqFReXjSm8qdCZHbiY/'
+    'ynUl8viKPSO2K1sTtjbZpm1bu/31nak7O/0+dNeZXcru4ntb7zu0r+yBHw9WPtTrSNjZwGsR8QeUgg6Wp1T0jqpxtWo2CGr4pJG1'
+    'UfsGDV9bVW/caz/UvVl7Za0Or0bWOFAt+JUTVc6V+6rQr6E9+cWEc7fOn6tz6F7M+m39t87e2ny7fUe/nf12FdkTtnfv3gP71u23'
+    'oU9TDr97tsG1pY8aKuUCRkfmK76vQpca1Ru0bPygUb1GZxsWa3ik/tPXWr42s96MOgVq36z5SvUfq3wcfa9wuYgke0G12rPwe7Uu'
+    'rz3d8eiM/XN3qTHNYj75feau9/ds2jP8j58PBBypeLrhpb3XKz8ck9hCXSpbgkfliimwuMStsjkrsMr7q71Xo2TNPTWmV+tRdVzl'
+    '9S+nli5e7GSB3yMuhYTbDmir01olLo0/fWfo9baxIy9MO3vr1Gen2p6sf+rQ6VFnJ15oHht+fe+dH+JCn91OPajaLE0CV4ROzBWf'
+    'd2OhNkXLlfi6VEyZFWXio1tGVyvdrlRisdioYQV4pDU8IGStvYPUVf00bXLi7sdvxlW51/v2mBtR1yZdXXU16GrAtfI3nDfL3T13'
+    'f+ejXxIOp7RRTvLi1lxBl3OUyRWUL6DQR0WGFr9X8knpmmUKlqlXpmHpfCXDii8scrDgN3ldERtyVAu8a9nO+7pKpXzzLDH+1P1e'
+    'dxw3119bfGVr7NuxkbFTY7+8sufq9evNb826G/fg5KNfnp1O7uDcpLrIaOuegPLBU3JoOSfkqhJ5OHJ7nop5v8hzLHJm7pW5xoTn'
+    'DqsRujvoZUdb2w45kFZkt5Vbzm1pb6VOSh6ftC3x48TXE8cnjkrqk3wwJS31aHoN1wS1OosmCl0h17dOscXZ8zu+dkiBSwO/D+wT'
+    'eMQR4Yi157dPtp6UQ6RSpC57oFx33k/rkupIWZvULnFrwlsJpROKJcQklEvMmaQmrUxpmBaTfs1l0yby47SPJdU2wfE4KDS0Zlhk'
+    '+MiITrnK5ma5r+Zenfu13J1yDYk4k7NF2Heh44ITHV3tByxpdAzvr/Zznkh9Lfl4wltP+z1+EL8z7spD9cHFB/Rh+YdxD0/Fffoo'
+    '8MmZp/sS7MlLU5X0BUpBFkF/lHPaPg6YH5gSPDU0IqxKzrfCX46oF/FOxEsRd8Kt4UfCluVoGHop+FGg1VHJ/q41XP6ADuKfaieV'
+    'oq6L6RPT2qdWSXmc3Dq5XXKx5H7JLLlHyvTUwWnT03s7iVJP/U2jvDLZTJOlDy0LrFttd+x7A153PHSUC9wQeCFwTmCtwCuOPo4F'
+    'AZEBHe0/2JZYb1rCLM3lilJRuor8yV/i7dks7bbaQk1Wlil1lZuuM65TLotClKpKZ6W1sk6JUa4oLqWz2kBtpO5Qd6on1ABwZS9t'
+    'lPaNdkK7rzEtJyvN+rJd7BB7wCJ4U8S9OuR7UpFuo+2k36QoeYwcLzexfG4JtH5gnW5dZN1q3Wadbf3J2tZa3prDOteS3zJevi+9'
+    'Ln1D+5KF/DY7rsWqudVAZZzrurOc86f0Iuly+oS01mlj0n5Jc6aVSJ+S3tOZw+V07VWc6ofsV87IOOmKXNo61XbOTh0FAp2Bd4KO'
+    'BX8Qsj5ECi0WOiZ0Qmil0NSQ4SEzgqcE/RpY23HePsaWZmkvX6a1yQjWXUtU+riaOjunD09bkxqbUjflSPLy5FXJ25OV5GEp0anp'
+    'qS+nRzkXQ1S005rwFUSSust7LTls0fa6ATkd9xxTA0OD3g0aHDQ+qGaQLeijwDGO+QE/2bvYHNaf5ILSXFKb79TC1HzKd86i6a3T'
+    '+qQuSIlLrp58NmlU0oSkwUlfJB1Oqpy8L3lESq/U4LTX08s7X3XtUtaoW7St7AZ/RnbRkZIiLZHLWNZYnkE0lbUWsLbCLcYy2lLI'
+    'ck0eKMdKb0q/0aZ0M/RJHK/Bj7BlrDuryUaykiyIvY7HxWw3S2SF+JfQH3H8fbKGqKQE7U4P0GX0EF1Dp9PP6Wv0DFlIOpI7fCzP'
+    'z+ewSuyU9pEWqu1VO6gF1RhlljJeqaJUVHopU5RvlW2KXe2u7lWba5O0Emwlq8Z384ZkD6lO59Oc0udSqlRZ7i5/IK+Vp8j95N6y'
+    'JP8pfSnll36gb9MnpDm5wKdxOz8A1DzQ7mhjta5aK9yv077XNK0J2vsBlER7Uo/epEulaJnJ+yyjrE1sZ2zd7DftHwZcCWjuGORY'
+    '49jkOOb41lHeUcAxNiBvQF/7LFu4raG1keUTeaDUkY4ic/k0thXxOJ9aSZntKu5a7mzpjHAeS/8ufXL6wPQd6ZHOD5zUtcAVrTxS'
+    'uqpO9aA2inXkech58ikNlt6DwO0p/yEHWzS5l2Wapa0l3PJI/k7uJp+XWknraG46g6ziZfkSloL2n1Oj1V1KTyXNNd/V29XJ9Y6r'
+    'p6ulq7mrH7ypnvKrEqn+pJaEx+Rjs2EtSt6CiO5Ch9N02laaJJ2SVKmK3FQuK3PptPS1NEOqJ6XQn2ldepfMJNVJXlhsHK/L83KN'
+    '2flddpM5WRs+FcoqiVcgS4hC5lG71FS6Ig2Ub8oWSyfLTkus5RVrM+tb1kbWfNZS1lOWKZb2lvNyJyQ9TaU/qESbkKPQV8PYAa2o'
+    '9okapwxQNNcPrv6uRq5wl+pMdt52FnG97VrrKql8peRSF6mR2irtYxYOjTifvALfHo1R/kA+IMuWgZZJlpWWVZZvLd9ZhlpetTyV'
+    'x8vV5JNST8lJZ9ImdCdU8VBenR9nHwCT97TL2lxtijZIG6/N1nbhVSRQ2o59zs4Bo2X41/wX6L80HkxKg0c6kTbQoHF8JW/FHTyG'
+    'dWPXta+1SO2AOlUtpl5S1ijdlJpKaSUCjFVaqa4MUbYrT5Tm6hW1gfZI28Te4GFkM8YzQtomfSKnyL0t3NLJ+oc13FbN1sM2xzbD'
+    '1t821dbQJtu2Wltbt1hqWHbI+eUvpau0FV1AVD6TP2bvs2h2BW3NoznVfeos1PyLOgePN9RgrbO2SLut1WExLCcfCj1egywgKaQG'
+    'HUEvU5W+IvWW+krzpLXSLGmxtAg+8Kk0CmN7ke6m38DnitIbZBmZQN4hUSSI6Op5PbRzPXhgPDvNvoUnfMqi2FPtpDZR6669puXX'
+    'Lqm/qdPV0eDrSIzZHvT2oHJUOawkKmXVyurb6hr1mdpT26QVYb+xhvwBb03uk4E0j3RR6iUnyeMsqmWu1WUdbttvK2NviTLe/qm9'
+    'mj23/aHtS1sh2wTrX5bylsHyekmlwbQDGc3XM8LKaDPUWCVE2Qc8xzt3OAfDb0Y4JzgnOxOclVzrXK2UeGWiGqHt14ayGsgiOpPc'
+    'dC2tKi2XisnD5b1yAUsBS2vL25bCFtlyUR4nF5SXSHmlYfQ++YAc53X4JpauDdMeqR3hqbuVDopdiYVX9nf1cU10fewa44px3XGV'
+    'Ufoqm5QAdax6Va0Oa5zT6rIZiDnJrALykG38DHIombQm9Uhj0g33rUgv8jYpS6KRsz1CJnWTb0GWsocvw3e38T+QX51DuSFyISsy'
+    'vTvIxii5hW9tRlkLBb8ZudJavpPPwXvb+AK+CznOAWQitTFaU8hRUo6OpjtoQam/tFlyyO/Kq8BTVSwtLD0tyy0xlkuWG/DAE5bF'
+    'lnGWuuCNXrJNXiS54A3LyX1kMAtYLMZzAUZxgHLLNQHsdNE51vmKM9oZ7Ax3tnJOdz5xfuy671qIyFtAu6ctZoN5J+QyOaUL0li5'
+    'vuWWZZb1kfUL2xVbiL20vRb0zz7bFFs528/WOEt9Swe5n/Q9/RoMuIz9qm1RTyg5lDqukc5z6S3Sb6UNTWualh+3EWk704qn/5r+'
+    'rrOOS1KSFVkLZvnBJ41pS6mr3MjSyvqqLdh+2D4Rqe4Ax07HXUeJQO445RjhSA4YGXDPXtP+nm2EdYZlt/yHdI2eRlaai1dBXnVA'
+    'zaV+pjxwTQNeHC67K6+rOkbzvKsyFEYt9Zo6TivFzrL3eCFYsQ29Tj+T7kjvyhvkO3JeyxuWjpbKllT5EnBSUt4tlZF+pqXpV+QB'
+    '/4jvZFXZTK2wtlaV1SPKQKWQcsm13PWd62fXQtcq112XQ+mtbBSR6ZbaGD5gZT3YYVaCD8d45yf9yY9kOdlJLoLfj5I/yAGyiMwG'
+    'VkKRV57DeE/ng3gT3hhZZBVwVVXwzbvIaGOQWZcEWy8gLlKHfk2P0txSZ+kH6aoUIteSB8tj5YnyNHm2PFLuKHeRG8ul5ARpPXy+'
+    'gfSELqb9aAjGuy+y6fPIZnvz8jyM32Tb2Co2k01lk8B509nXbBpe72In2WOwei5kzZ15H8TqRQKrx8CFd5C3x8KvDiNHXwVELuM/'
+    '83l8PDLmdvxN3hKKqxYvx4shFkXzV3hNoOtd3p+P4L/y6/CKCFKVdCDjEUf2kSSSSIrR1og76+kxeoY+oDYpp1RKqiYVlUojfpSV'
+    'KknlJI0+Q7lFL6EcpavpZrqITqVf0qG0P21De9H3aW+oh3aI5dCpdBQdh/0Nxq0nfYu2p5VpKVqQxpEYMo/0JK+SdP4b8vaq/B77'
+    'htVgTu1brZnm0PaoQ9UaqqJcQGz8QflemazMU9Yq1zB60eqX6jG1HHg1jC0AHpfzauQk6U+T6BRoye/lNHkkvKuE9VPrXOtG6+/W'
+    '9dZ51t7WEtZ7iHCRlu/kSHmodJJWo1+QexjHCewG/GyjWkndrnRXcivnXL+7Nro2uY5CP76KOiV1vCpps7TXWBz7ifcgxekW2g/1'
+    'LJHLWn62uCyvo5Yt1gPQrIutfa1Frecs71ji5HbyRskuNaezSSwvzUey01pxbYoaqA5XwlDDDNdw14euYa7V8N8qykTEo49UWftB'
+    'awy2mslfJzb6Pa0mHZEay0fll8EPGyynLdcsZy27LDMs7SwBlq/lIvJSqKXR0EpvkV94Dt6dHdJqaEvVV9T90BjhyiPXCdcB10FX'
+    'nKuY0lXZrISpI9VYtZV2VvuAPWMD+TPelzwl3THCL0ljpINSEtBaXC4h2+V4aYs0Tqot3aE/gYtukBmkONnC3+GE/8LqslRtgzZU'
+    'a6lFa8W0Qog2VbSO2hBti2bDZxOB0Px8ND/Ii5KR8J7CtANdSO/QKKkd4tpKaTt84p50QjoJNbNSmip9jDgXJl2nG+gntBEtRC+R'
+    'tWQikBgNPt7J5yLOdeUVeBAUzVn2O9vJ1oDPp7Av2VCohPasAavOKrK8LBfLySQWwkJZJCuKd99hndl4tpBtZRfgL3l5az6A/4Q2'
+    'pfIyUArjye/kAaJPHfomHQZd+w39Fj47ByrkCzqA9qAtaU0aRZPJBfIbmYwIUQnefxfa9Vew/Ej+CTyvG3zvY/Tye3janzwB8aEO'
+    '6UK+IrtJAilN36Ff0Y30Hs0Pzf2eNFFaAlWxVzoqHZI2SSukn6TxUicw1hP6B50G/RBITyC21yIaX8078Uh+Gv1rh76c1xZo72kN'
+    'tAKaS72n/gW071E3q5vUjciv/lRPq09UquXQampvaQO176CQHmj5WRP2EfuFnWBPWDHeBoy2GrEoBaxWn3yKnizBeNyBogynJcCW'
+    '0bQ2+lmVVqIlaT6ai1poErkKH9pHfiZTSR9EyVdIAWIjt8W83zrY7zs+Cbrre/4jni/ha8CXJ/gVRESZ5MN325AeZBIyurVgzWPg'
+    'zyvkNrkJG54mh8l2spp8Qz4nI0TULUkUfhnx8mveD1xaiofwR8gKY9jP0DKz2BfIRUax4bj/HCp4BXjwMLvH0qGcqvK3oJ6WQfWf'
+    'Q4S1kiLgjTcxPgPIWGDme/IdyrdkOjhsKuoaRT4mbUkTUoUUJCHQaPfAjvsQ3VcAVVPAiwN5d96FdwAz1kc+VAP82Iq3BVt+BLvN'
+    'Q38P8XhOkC3Vg0IYD2bfTWJJKlBTGYgeCN/8jf5Jz9On1IJ4DaEsESmBxtFzdCddipjfE+iy0ptkJbygOclB/kLs+AD8S/kh8NUg'
+    '1pqVB1JtzKUpWgo8J4gVYlWA6PeA720sluWA6u4HWx/iGi8HhvwWedMVopEojNbL4C195F6ixamdJpLLsO+3ZBC8pjih5DpwOoX3'
+    '4LV5FLzmPvsL9juE3O4wcHEN3pDCwngexJjWaM94xIhd/CrqiCTlSVPSGTYbiN5OI+OAyRFQXt1Id7BLC9IQGGoAW1QgxcjL+O4r'
+    'pC4wXx+fDifzyRZyHNliIdqAvgeG/xG6/yQi9l36CHz8DN5/DXFkO3hgCK1Bbcghp5LXiUQ2w9ZF+TmM8jssD7uv7UbmMwB4bqRV'
+    '1cprlbWmwP90LUZL1SqwIWh/UT6Kn+QvYWzPk2jElM00AczVU5osrYaHbYXC2oCYO1CqL1ml3Yg1JehRRFWJLMHongMfRCFbnaQ1'
+    '1Ih2WF2sDlf7qd3UruoH4PbF6nHVrjXRJmu3tFfZHJbAWkDZOUhveEMAGGEFvULzIvL1kEZL30hzpfnSHOkzqQsY0iadp7+g1yXo'
+    'Y7KBfIRs5CHi70z0rDVidBQ0ej5emFfiLfj7fAaUZRKvhL0uIXdJEfoh7OSir0kjwQs3kEcWhFZoKjeX35Rry3nkh+jPZKk1cLUO'
+    'sTSMrsco3ER+Vxhquy2L16Zq9bVUKPkBah01r0rUJ8od5T6iiIQo1lWdrB6C1u6iLdcCwQlHWTkoFxdvC+8kYL3vMSaFpZbIMhbA'
+    'ZiekB1D+p8FR66TZ0gD0swiw/Buyk0aU0EPwp7YY9QT43WL+KXpSmUcgLw8AKwfhWRH+Erz4fbRsJbTHE2TGVYGYYfDFXeQRCQVK'
+    '60JL9IDKGSZUwDDogfegC+pBAYRTju9cJjvIYiCuOxBYgej/h9wEq64HNmfzsXwIbPkh+PYjPBsO/h2LmqagzAIPLeAboH4O8Utg'
+    'oVSgOBScUAVc+hrw2hwM1hn77AkMfEiGAs3jochnIZbNgrfMIF+DrUaRwRizrvDwZqQ2qYj8iiDuXINPbMS+J0HrtYEfRnHO7iD+'
+    'HGJ72Sa2ETpsLnKulWw14ssfeP8+U1gQlFVdRMjR4MY9/DayhBJoxdvg3a/ATPPIUlh+NVmBfs5ETweDt2qTUsh4H4FFf0afWkCF'
+    'lOSM3WXH2Aaw3s9sCe6Xsi2Ip/r+I5Hv9YY9YmDh/KQlfGALLBdF29IxdCU9C0+zSgWkilItxNMGUk1otGDpMbxuHWJaW1qOuuCh'
+    'P8CbyyLOnAGHTuC9eCMowXBu4cnAexJ4QeY2jOar6PMAMOAGjMFdMGAJ5EodwC6zoIyXkV9R7zaUjWQd+jID3t8BLFAEcSIesWYt'
+    'n4qx6gBtWRG9yQ18WMFBLihWJwsAcsuBa9/EWOqRcwO/gDELA5s0hp16kSHkS9hpGVkDP1oLSy1CfXNhrelg0AGkI2qpAjYOJRai'
+    '/092CzFA17p7weknEZ9O8+N4fUr8X3UNXP8Q6iYFtyTcJ4h/ue4jjzsJDG9B77+HNwzn7/H2UPKv8OKIujaMcSp7Cn13E+Uxnkt4'
+    'Lw88tzb084d8MiL9MaAslJQjbyA6TsSI/k6ukSfI40NoJPRCGcTUl8HORWluhINkRNrTwPUa9GEkENYYvysAbCcDG5fR1hiw9Gp4'
+    'zHI8rkGLluO2FK/X8+3Azx5olcOw5wGojq343iL+DdD4KbRQa7QnGpa18QR2ie1nv7JF4KtJbBwbi3g5GRnDj8Dn70BlCguFcmrD'
+    'P+Pzsc8LXEEmVQceMQhK4EfyC9C4HmO4GqM4B37xGeJ3dZILOe4FKPHpvC8sUxyRWUPsPc+Og0GOsFPsOrRpEGJHW4zgRvQkCqM/'
+    'hexFXHqVfkrn0SP0CY0ACutLbaWuUjfpLak5MoUQ6RE9AHXVFSx5G/V1IXnJKXBkJ16IXwXSh7E2yNnyQsGp2lMtHnwvscJQcX2g'
+    'Bw6gHyWguL5BhmNH/PkEvLKX3AKLFUIMbA5maQ29Vge2D6NPoTvWwq87Iz5J5CT8ajBvJqLgJbYDHjuNjUYcGQTtOBZ51VLE2RPQ'
+    'wTmB+PfRmh3AiK6U+gFzW8klwkkBWkFwVyfaDaUHbu1RYw0op0iqknhyhmyGTw0G270K5tA94DTQuAq89LXQiX2hEzthBJryBrwO'
+    'aqkHj2sEu7bmHaE9PsA3RsNfvsf4xwBbseJf2dxoexPgZQT00iaosThipQXoq4JBB4I7x9LJsOQcOlfMx34KLVIPiOPkFFlFRpNW'
+    'wNgtIGoo+CQ/f4hezwH7N2fRsK6FpWvJWprGkL+XYLVZL9hgM4uHUuwIXjnMgxCTJ8G2qYitncAaq6FvrkPfpFMnTaT36Wlkg9Np'
+    'H1qdyvQIcuI2JA+5wBdCQxXhD9h6aPJuUDCFWQDqUTRNI1Dl5aFzhgGhxxhn1cHgq2DjEvD1+bCdBQqmD3qzHDr4LL0JtXCd/kV3'
+    '0zXo3xBYuhR1Ivp+Dw1SBax8CV4wBtasygsC+8ngxFvg5DgwYyBwWgds9jn2fg5atBI4fzZ+6SKlwHwjoO43IsOJo6lUlgIRrxkw'
+    'epPup2tRz4f0dVg3Ab2eSd5DPRzcuFLUUwP2c7IbQEgM+vYr2H4trLmPnWa3UWcu/jLG9RNE9HVQxwaLvU7eR4SZi9i+FpHvEPj2'
+    'OMbvBNTwTjDazxjP8dBWvUg70ghtLEJyEjtx8gfgqito90lEsVPY1znEvniwlgVcEQFUvYQ40QjRojvaNwDR5BMw7hD48CAotQ9J'
+    'f/hSe/BRPeyxJMlPHIQJbrzAjwCJ28Gx64GulXhci8df4dkbwH8xYM0DYMuTqO082PKmONbhGXgyBdElQRxxoPPlPX4Hn93E/W3x'
+    'zmOeLI6XSAeX6Ec8BKOFhaB4XkbErw092BQKpSW0QhtE3paIqPVINXxWXBwNYccYpmAfN1DnMUSWPcjutqB1v6GsF3NnB2H7q6g1'
+    'GV7gALaKi/3WhEc2hPJsIPZWHrUVIAFg0Ruw12o+Dcz8Bi/Dg3kiO4NY+SP7Cnj7gL3L3mIdoaY74Nn7bAR48SfkjlcZRVRqCeX/'
+    'E+yTigy1NRmD8foTaswCBq9C20CZfEYn0i/pDHjYt7j/Gs/H4b0P4X9taAtaH/gvQ4sANeE0ApwTjBJIA1D0exuKhWokmdxHLnWa'
+    'xGDv0zBurRF3ZWB4FeJuKyjCeMT4cWC9KJaoHdNWQnd+rL2jNYc2rQsV2lbrpY1B9ncQ/lqG9YQSuMVK8f6IBARWnYU8oBByzG/B'
+    'qck0j1QFGrGL1As6uJPUTHoZGNez6ZHgBQbkfQYr3kP8eAd4vgwO7MfqsHD2VLugHdA2aqu1ddom7Q8tFrxQlLUAN/4CrswNG30F'
+    'jKTxCsDdTMS521DBpaAG34EdRtLxdAJuw/G8G/iwCs0LT72Kby2B1vkIHFQZo0fIU6iyQ2jzcmiJGfCpIfCXD1H6ofRBeV8U/bEH'
+    'eLIHSleUbojK7+NbQ8GNX+B3CzDK24GXv0Q2FkmigbT24Ohx0AqrEF+PIiu7jWz+CXmI+2vgwd2Iud9A73UDK+cDUo4iDgyDt5ZF'
+    '7nUNkfFHNgHc1541BQfWhTXeYF3Yx8DNUmi5+4gGdVD7QkRojkyjC6LbZmSxFOioBQ7uCiXeF7d3kLfXAAo4at8OC/VFXQ5yGeM7'
+    'HpoiGtr4HvKV38B8s9h08OxMPPsN+vEOs+DTdujbOvhULozmEPQilthpRXDuCIzpGrqLHgZfnaMnML5b6U9g4t6Ib+H0AdCkx7Yy'
+    'JAm+/S2s2AD6JAFReSObj6x5EHDfG6UvejMEdf4I3joKBiMY+erInD8Dy69Dxv4QHFkYXPcGxnYQ+QLxdAX4SWesUxjFW0BuAkkk'
+    'TiIByYE0J2rORwsD7wVxHyVwHwykU5oEu/9F9kNFzAOz9UVfokkgiUMNqxH/BsIONRF7g3kqewjdcBm4ikX+eR+ZfDAvAR3YE76w'
+    'AhEzlReHf4wEeg6TZ9BS5Wkz2p1+glg3EdFuGP2IdqYNoaus9CrqGgsuzEeuAlUfQbkx9ic0Qm/2KotgSdo5bRfQvEJbhqxng7Zf'
+    'uwJU52ON2AB40HkWgixlFHgmkZdHBjYPzOwkpaEdPkZU+xmW3k+PQr8cpDGIDPNRd1/aGP3VyDlo3klAU02w3ROg6Vf0bhB/F7xT'
+    'B+qwLHR/cdzKITI1AMreg66cxpegnhMYYRfPAQ6vCA5rDgXbFfV+CA/pD/z2wasO4p+IV6Cwc4PtXeDe62DuE2DCveDo34H7XdCr'
+    '+tFdZ6EO9OPDJESNkmDFxqQT9jEcWcBc6OTlaOEm4HQTVPlashIKay5wOxqxoifYuCFiQwGgMwF7P4X9rgG6Z/MvkXMMh5cNh0Ya'
+    'gueT0OpvwBO/gpdPgF2foa680Kx14W3vw5smici2AopxGxD/O7xsF+63kN9ETvMtPh+KPnVCDKiK/kSA7ZIQN/RjzPahJ5vB8pug'
+    'GNfj2U5kPIcRBa4jpqRD0+UFp9dA9OyMSD8M2lTv0Uogchvwvge3GHj5JtS7AqphDno8GJGwHSxQnhQE3lLR1qPQbsv4XPDFIHhF'
+    'V2C9NTRXI4xHfWQijaCF2kClvAdMjgSv/QAv/R0x6Dr6SGDPImDI2hifDojNH2HvI6Htv0AuMhk2/Ar1jRE5oj4L0gyZZSXEpdzI'
+    'QdK4/n/RBexnHzhuHWLsEkSVBSgL8bgMPrAR47cXbbsEO+g1BeB3xWDR6sgLmwHFncAu3YGIXijd0fuOeK8xeKQC7JcXPdOA1Nvg'
+    'vcNo7Ubgfb4YtQlg0qEYsSHgtOF4NQ3vLhT/QB1FexK4Db+NRg1vwkq6NX8Av2wnB6G3LoLH7pB7uF0nF6CU98LGi8AoI4CSN8Rc'
+    'n5U8wHhtgCXHwo5v8lq8FM/FHfCyFJRUlgYVZ+OhvADQXgc5QB+0ZS7qPgRbusBmL0GpvA1bjcNeFwisbAAqN4ssYxEwMgWI7Y9+'
+    'N4RH5IPWeoiIr/9PMRv7GQBF3I6/jvF6DfXWglZuiFft8O7H+HQWOHw72naHqzwS49UE/jgE+/sJyN8FnXUBXHQPWvkh7m9Au+uq'
+    'ayM+nYr41xneVxL2fIzaNkNtj0Ue3QpqPBr9COUSsoNUcBJjVh6GfKQC9HkX+MQMeMIJqKIwtLUVtNZ0YHI/Im8isSG/KwoNUI6+'
+    'BFYqBD7UUO8p+MI89K8jLBkGFtwPJAxDJlyD5+UK4vdxqMe1iAILwNULoSY3sr3sHHvE7ODCRrDkVGDoHLgwPxihO5kAX4sBuz5C'
+    'FhIG/i2GnKMMInAR1B2AXP4BOQ8PXAptMRC4rQFPkMh9tHcTsDAVKP8Y0bQTRqgVPKEFHjvBK/oI/E/ic4DUdcDUIcEq99HHFHGs'
+    'rn6ErYxH/TjZJ8j8r+Lzw9BpG8HS8/GryYhtoxBFBiBz6QNv6olbb8Tqj5CXDsEYTUTNs/HNpUCErjEPIIaegb68Aj16Xxxl+hh1'
+    'JaGP+rG3+vHGGtePmXVAHeYEagsguy8lNF8d+EEL+Ns7GGV99qY/7D9AlA/xqgfe7QB92RiMrM9G5kLLU4SnHAIPrDH9ZCy85GNo'
+    'pj5oY1+guT/arfPcFLDcQqEpDoOdHqAlgdCnulc2Qo3dwEGDgd/JZAZ4aD6YbSnYdRmwvBzPfiELMcbfiPnlL8CvQ2F9vT265zbF'
+    'uFVF63XfzYkW6d77AB6pz53vQbs2giEWAX0zYaXP+ThYcijKIJTBYl5rNOw3GS3/gS8GP21E3n8QsfGK0MMq148kLgjrvIQ6XkVN'
+    '9dFaXRPXByPVAuIqoOZSiOp5gT2HOO45Gfx0H1a5Bo46C6Wvz44cA//rRwn/hf3eROueoI1O6BwrvCMH7FgQ1iwNpfoy9lcBCqEK'
+    '2K4C6ozGvovg0/zoWSD6xjGCz6DHjL2fwp4PoI8xiHkbgKy1sO4qlOVidmOFeL4W76/Hp5vggdtgjRjEgP0Yr6No12m07y9+GXi7'
+    'Bf++h3bFASn67I2CtukICUB01NunH1ddCPG0ONqjt7Iyel5DZB71gYamKM0QR94Adt4Q5XWwejOUJiiN8J36sFxt2K86flcVv64E'
+    '39ZLZdHTynjvFWCqprBpbXH/qij6e9VQ9N9URL1lYaXiaEcB6NwIoDcQ2Y0MxasfR56KdicD5UZJNo8cd4l8yY5vhuIX+dCLIkBK'
+    'KeynDEo0HkuBo0rAAwqhj5Gwcwh6rR9lruD3ibDGE9jkMe71o9OTxbHqNuwrD/YTjdbruVdbxJM+4Ds9fk0Den8AWpcAs8twW4zn'
+    '+pznF2QUVEEv+E9T9KmsyBjTgJO/MILbMG4L4R1TEFVGgbuG4jYSfv0Fnw61qf/fswNZ00WMUBrXj3MvBWs1gTroAcYfBgX4FThy'
+    'NrxjDsoMeNBEtOQTaIfO4E997k5XOVbU9hDoO4X6tkMTrAKvL0KtC3H/C15tQDw4gE9jgYI04DISiKyEaNYCfesHtToWtcyEYv0R'
+    'vrkA99+jvunQHqORGfcGX7TCdyvDkpGwtcL1mdzTwNkOYG8FalqATORb9HAu/w7PFuAdPU5vEDNuB+EjF+EVD2HhFDFaAchvQ+BP'
+    '4UBeLtyH47k+1voZCBpGIAH7v4fIdwksp3vALuiA9WIubxH/ETXMgadPhvXGw9tHo4ziI+Dn+gz2KJSx8PfPoUamIbbNE8fJrxN6'
+    '4Yg4ij8ebZAwvgUxuq/Az1sirvYG24zACH6NsV0ANlqNuLqJbBWzsZvFfKyuxL6HPcbDUn1gjdfBpBWAqHAgKQWjfAkRYj9qWW/a'
+    '/SfYfTH4WrfBDnyiH7//EHa3A1cl4SXNwIjvwbJjEGm/gcWXgAVXoaxA7YvAhDMQp4ZghDvA+6oCu8HECU44BiQZM/cf886IPvV4'
+    'FcTa4rww4m0+lEK8CHRFeXEEwpvQ0R/CIlNgMUOVXYVVdU7ODWSXBWpqC99ubvpyE9iiLny+Mhi7KPwoJ/Arw++SBNvdAt9eA7qu'
+    'iTmNu8CQ4SsUY5kDfSqEXpXDb6vDs+sAKfVxqyt8uxK8sAjYM4RQYalYYPAPRLEVaNc3GCU9mnwq4omevX6AWDIIIzke7Z4DHK0Q'
+    'xwwdB4fdBSoY7BeGfRUUPBUtji4qCRwXAirDxHkgCcDNJREXDF03CygZif33R0TtBpt14h2hHDoiZ38XcbwPLDRIZMPT0ZYf4Sdr'
+    'Ud/v0J1HMGJnwMD6jPcNwZ46f95D+x+YLPpUzIDr8zX6GSihaEEUeloZvW5G2iAD6Sei3VQxujqiNkDF7BCaexcetyDfWgHmmAtv'
+    '1v8LfBtjUB29ioCVHsPOR4CllWjRdFhiCFr5PtRaV6inLmh1b/RmMOw2DTFvORBxGD2OF+eMREG514Wnviti7Vgz1s5D+U7480yg'
+    'Tf/vcSAQ3wmeX094dD54HsNoPhA50kkzR9qOMdqK23bYYy/eOybOmrktzphRkecGwXPzAyllUGdV4Kamyeu10I9q4PKXwLz6yOSB'
+    'jwTDszmwp/9rECfOmLkGHFxCbfr5Ln/h2WVxdo2OLXekeog+6VZO8ClPBUs/EfNpRgRIQ9FHQD/jJ0TwfzFgoiJa0wC41jOBbvCi'
+    '/vC0Iej3KPjbONxG4/kQvNcfPtgZ7N4UrS6PvkQIbnssZtIOot8b4DlLMApzgaPposyA930HXOpKbCtwfFzkIIlAZpCIGGXR93rY'
+    'XyvkUZ3AE13Brp3x2B7vNMPYVINdiqGVQbD4M/zygsDqNjCUzm3zUNMc1DUL998JFl0FRtnJ/xTzd/HwNxvaWBj7qAGl3xo19IBK'
+    '+gg9GYz+DEUZjCg1AO/1Qp1tgKm64LhyaJeeBVOin2el/1dzEf07Adz8CWbah17sA8ceFJg/i3HQz4F6LM7q0r1bR3YhRJiysGo1'
+    'ROy6QiE1xb5biDlJo7RCaWEySVNwSWOURqI0wE1/pSuFZkJF6L9rhdbrs5ltUd4Us5qtzT00xS/qoJ6qYI6yqLeIUH1BiG9MnG32'
+    'FAi6C5xch0ViRbmCZ9eBqXtCB+szrS4Rw4PxuzxCD+jcVN5UI27lVQbvRmEkIsS+uTgH7SH2exm2Pi5izk6M8EaUDUJdbcKrndCO'
+    'B2Cns6jztmkjQytEoaXlsGed/wwLNRalPl7VEixYDvUVxjjkgE0J2Fz3hFto+QXUpv8fpftcDGLFVnH84xYxb7sDGNwFfBh67hTq'
+    'vSD05V2h+p+YXpBmnkOYLnS/+wxP4wzDdOEhumpKFMXwo2cej3qGXus+lij2lCr25RTnTXrPNLSI8wT1swYdKIG4BaGEiBgeKm6h'
+    '6FUOcR+GksMs+mch4nuB+L5DnHlonDspec40NM429J4trZ/XaBVnIzpEPfo5fRGwWh4owoIYS12j6qUIboXxTj6gIzcYJhTftuL3'
+    'LhGv7gHDl8ErJzFWhmW3iaNP9RnxdUIvrxdqeSdsq8/WnxZ2vQMPewobKEJPBpk15wXL5Rf15MErQz3KiDRpsFq8yOUu4PfH4D/7'
+    'gI6dgjc3iWLUsAv+9aeoQz9LUM8MUmFdivbqejW/QE4ZoEM/8kPPDSri8SW81vMCI64FwWLMrO8OMBOLnp0WqNmPvu0SSNWxs0v8'
+    'u7kPLTkq8kOdV6+Ksx4fwibPBFKcnnNKVRMj6fCXJPT7kWDmW/CkKyKvOQHb6fzwB3ql43K7OG53i7jfLmr7Q7DGUXzTiJTX8et7'
+    '4lxKHV/6/xmp5vmtaUK76xh8ij48FBHguogAek/0/5iPAOF/Ym8H8XgIPTsiMir9GOFLIsvV9/tMjI3u2UHCdnlgvcKwUjF4lq7y'
+    'y4j7UoiiRQU23MgIFjkExZgporeGNySIMzTdLU0X56xqnIrzYvXzZEOAYF2ZRojsKFKU3Hila9VQE9V288xfHb+K52xe43xeTeBa'
+    'ElgOxm+M9kaZeWAFwUZVwQzVRVZUW0TPmqLoOVRlwVFlBUsVw690pOdBSyLEOa6hovZA4YuBZtF9MtgsQZ6b77Mg9Mtd7J5zmh0i'
+    'B9S/Y3iv4W15hbdFwZLFPNmUrrfKiaJnVaVFVuXbtnDsIRj7088tpkCsKiySauZsycLORnGzDBMWsggbBZp8kgM9DMPNuA8Tlg4y'
+    'z1u2CN7gJnLTPGNpsNhTockMbksUtaSZ4yDjtw7Rw3DRu/xoc5TZM71fep9eEqU8/PBlvCorbF9G5I4GngqBgXQW0HGgj4NvCRf3'
+    'uUUx+KIAvm9gs4SoJVrs0aihvDkLUMHMkSuZ2XIF8clLojW6stVLGTOPNZBdSrSnlJnTlvS85/2kpKivBNqs34qh5UXQDoMp8wkG'
+    '01ubU7C0YVmHwILByvpmcIM7biSaqiseJU5o3/vgvDvif8vb5r2u2W6Zr+6YsSleZNXP8Hs9qjjNM/GNaGIT/uUw8eqOEUHCn6wC'
+    'O25/MkbYnaPr/5M+MP89NWa94sE1j0yVmGzOfunzXxx+LPucuW+cs294qt4/l+hbgmCjB+KfWJ2NLvLz4L3TYkbnGG4nUE7idtqc'
+    'R7kguOiqOJfhtqlS9fbECdvEC2Z7YP6ze82zP30PR8FpBwWb+uqtQybL6VE91uRpY97IO6MRLhClxz4dTUXEaBYU80WRgtvcObOh'
+    'rY15qRviXPXzaPUp0YPjopwQfKrXdVHUdhvfjRcjlCr+c6aC94LMaJ5TcJ+Bk1AxOvrYSML3nB5kPEGNRp/1cleU+6Z2f+KJOKrw'
+    'cpvw8BzCVwyGyW96iuFVuQWDuOcBLFnWZYz2IxFjHon5mgQzC3CafZBN/nZ4mNFhKg+LiAEGK6WI/enRW493l2GT8+a4H8WYHEYx'
+    'xuaEGYP08bku5lrjzaxPx7Ixexbiw5nekkf0J6eIFUGCE62ifh3ZxloKimc1C++qDu4VHQxmDjDVlrGWg3+kSRVW0VdRMPxSt77u'
+    'i7eEN+rovC+QaWjENHOWzJgRzmGyVSQsX0Bgq4CpcfIIVOkRJkjUSEVrjchmeGKiUIopZmw3fE0SrQ0UqMmFPeQ191tIcGYBsfc8'
+    'gjV1ewQLxjGY3Fgdw73WBTPjpUO0MA/apWeXL4MdqyE66scdNhOZxpvIrfSiZw6tyBsiY6iNjKgKuLMUeD2PJ19IFcrG0Bu6j1/3'
+    '5JdxIlMwlJjdzBwLe+ZoK4nIXE3MZer5Qnmhx4qhRfq+jWw2HZYwZkauCh1zxuSNYyZuzpi40f36Ab6ZIGZdDdQEm3NfkQI1+UzE'
+    'GHElTPhbgAcvzFRpqabOTze1impi0B3Zcgqlkgd7y2+Oqs77USJyFTLH2KjD8LIggS27uRaIxbP6ibFSiOE97oicQ7TXHZXd+iPA'
+    'ZGuvrnomvPSBiBD6jJGeo10T5brwHx2VhuWThQ9RMdrBPjxXSGh7PW7pJUrM2eYVUSuH0C+yOY9gHElzz+TuayIXvCJu18RRNUY9'
+    'hqfKIouNwH4Mra3PblcTeZqOqYYiVzNu+qx/HaHAKmPMy2LM9VnjvAK5wSYDMuGzTqFp3SVNKD5Dz+gcZOgqvV9hZhaRW4x1Hg87'
+    'GCPhjsahngjoMLWZ1WdtHP+VfHzXwfGuFOPO9NytSjEf3Xgx4qIquMbI6ohn3RvJVFW6NxoxV9dUjwW33zUzAgPhpwTCdY40WFIv'
+    'R0VsOQ0GvYjvueOKMTto6Gm7+I/Bi/e8HrznFpoxRORukkB6msjwDQzdMnP8S9jzRRG3LopjUGNFvu/Ogt3RP8Unc3WveeTOcNIE'
+    'Exic/0CwwQ0TM959u+egros+3BUIemIqmDQftUpNi8nmqkUGl3vreCY4+YFQKbeFMtKP87ohmMfgZuN/mEdmhEwRebs7X6DEUC42'
+    'vzWHbJ5VetxrDvmvSmQ3o4XDVPKGpjIiufveeJ1R8XEzFrl8ZgrccwWJ4nmKz6yAZq6dZGToAULH+Wo4owQKDFs9ap0Jjk8XqHRr'
+    'uXih3wwlZ8SuO6Z+vCM0pHuu9aHQVUasf+YzR6GYI03MtYFsHs4KFH4U6Ml7DJ8KMHssmy1y99rNrKme3MSdp6QKezjNXE71eLe7'
+    'PpvHAoFmnHaYWsPuY19qxlCDM5yeNZ/STJs6Pdmi4ZmGArD5ZKC5BFvkF4weJbKW4kLdl/Bo/RLinaKmOiwkmD6v6V1GthpqZoAO'
+    'M/cLMLWFwfA5fKJRPpH36VqzKPZZUmTWZXxyv7KezMTIjIqZLO2u04gubs1oZG02z2pTFmET7zpbxopUBmbdXGlk23lFXMxvxjJD'
+    'oxQ0n+cTxc0guQSD5sxQp8W0PvGsZ6Wao+hdT8vYqGfVMosZ/QLMkQwykeQd3QCPBe2m39k8q39Jpu9KPqu0yZ57g83dq3W5fyGZ'
+    '6565VwpTPJh0M7kbkckC+0nm82QPTpNNpk/zlPQMxWnevLOE3jkKpxkVvOukMWER6pmdy7zWHPGZufMyrXd9Nd81yogZZWS/1dXs'
+    'Hs5yzwe6V09jHk9xzxskmHzxSOjch4JX75vskJkfEgRfGdFYMSOBd2U3A4nG6HkzQsmjyv1rTjTnFR6LXEOvPc6TgcaJW5yZ9T0y'
+    '/5Nw1+/mS7dK82KNmPYz7r3200yGNOr2ndN4YrKlO8OMF21xZ73u/NrIe70zTjaBWUO9Gaot3GeuIqeZl3jzfyP3ZyIzNpSN2wLG'
+    'LJnvzEqSwFyaZ8bMrXkspj87hEcHe2af3DNSgR52tJm2l33w7/ZT3/lgyScfCvDs26tJjZmiMDNXjfDMbIR5ZqF9dZXDsyKezUSD'
+    '1bOGnzeW2j2z3IGe1od4ZrbDPJYMzzT7E+5RxzlMLgoxGdcbD2QzInJTx7nn6NNN1WWM+zO/sX/kg794Me7G0QrG6Cea4+HGnGKO'
+    'iXuNQF/s+3ue3W9uJOPqjL4Kx9fzves00ueuYOq7+mHmVTn99+lmR4vPWFgzrK3oz7BetvTOYnuLat572cxtB9knbjt8tIKBD/cc'
+    'qXvOIMCPnbxI9cepdyVGyTPfZPfkT0EmdkKFF3rnNN3Fi9JQE6nBPjHH7oNXX66iPv+dEMIzrJfqtbj73xTqWZPTXzXaTR1gPLrv'
+    'bR77e5nRm3UoZq7hzBRjnBlWsfSuu+m10/NWhPVfCVbLsje+641Sn4jiq4fdKPatxYsU31U3neajy/PMaf4zonpa7b8Kq/8apV7W'
+    '9uq6dL/sK8XUkKk+MdmItt79UxM1lgyrjXpjouTTBwPZXtv779cd7Yx4ZzCxoapymJyVW8xR5TGz0DxmDupVUMaMcJBP/pmxbiXT'
+    '6qrMo4llM2uxZ4gBXv4PMrHty4juGS3m84+l00eNJ/sc7+XNSDL/n5Dq0euGVdL8LOTMoqT74cD3HW9xZVix1TeWe3Fo8ShHb9bm'
+    'X3xZxKtJ3WvbunxQ6cyyDd579yqyrgzFHxXefMbXRr6YTPWzjP9auYYmedEq1jTTI33uCsCWDGvo+uesdr9n7v+mHD6KO9Dn/61g'
+    'n1zTKDn88tsQv/8SfNWGJYPa4D7rS6sZFLD/GHv5PTPbWD06RvZoZN+5Gt/o5PJhy8w63Y21jFFL8lmR2NCuAZ7sxOGXi7jXJs64'
+    'FjHzi5KuTCUzrr1x2eI3D+Edocz1+cZH38ivPSczyLxqtC9uLH7e4jtqvpFfy5TJGXuWfPbiG+0CMpSsepCZ3f3VhXd1bC3LCOXr'
+    'LV47aJnW1/a3v8uzT+YXLTPmTVa/KCf5RTh/LembN3rZMtnz36s3FjGf2nxngL1j7q8SfdGe9arp0gv0hj2Tr2dUov65sZTFGujU'
+    'Dy++M9dWn5kym5+9rB4VacmgcSW/NdUz9sA3e5ezWL9c+odFznJddDmTwnXfvL10627J792sGTbjauV2T5z1j0VWP22dcVQzttt3'
+    'HsO/78+zRVYqz9c7+AuuNZD5agr8udcx0HxWJc961X+aBctk7J03Iyd+nOld+V71WzU/4wr+vlmrfzzMeO0A35Znvfp+5n17YxD1'
+    'U/KWLMc88zhbfbD//DX3M141QvOLjt6eZ91K9i+ut0B8rM0zXZXAza5KppX9s2Zh1adlGa8PoflFHi1DPMr4i4y//bsrStAMuMro'
+    'zRY/XZ8xn5WzvCKCP+9IWVzpQcrAgFl9KytmzphtPc8LDb2XFaP/fa0vum6G79hLWXik/DdFeg5mMyM341VPeJYj6G+Dv7uaij8D'
+    'ZcVH3PM+f861PLL2BilLa0iZ+NXygqhD/WIYfQ4K/MdIegHXZ97b82LaPymWLFtNMyEm43U/2HOvsJLVlVN8+ZdmkY/4WzUr9ZJx'
+    'RuufXU3H//O/x86Lr8Oi+PCf4qM8M8eHrHjKvw0sw33mNr/oGkaZ42fWjEIzXE0pa0bJao9SJr34YgVFM4xaVuj+O5aSsrx2ju9e'
+    '//76TDTLzEXy4+6M3vv3V+x5/uwqzcAg/+k1of7p1aCer8vIf+XaVCwTGtnfxFZ/tWx9TsnqGkPSP7K89AJOlDJp8X9esuZKSxYq'
+    'IWORM2UqL8426P+gZMT0v70KXNZXVfNX+n9/vbL//vZilD9f67G/vbbbf3KtvBdf6y0j+7z4ymP//Ep0//66Z3/nxS/K3fyV1H9+'
+    'Pb7/mVVfjMp/ih2eSUX+0yv/PZ8LM14ZzNsi7385//4qgfQ/vnbgP6nFPzf2f+e/Xd9/erXErFr04gj7ondoFhE3Y2bzvHpepJf+'
+    'bxeSgcv/3fj+0yhB/4djRf71VSL//TUyaabbv2O9rBQXJf+G9/9fXhn1v1WXPwO9mOsz8l3GX/2/avP/1ivjZm/ZW/aWvWVv2Vv2'
+    'lr1lb9lb9pa9ZW/ZW/aWvWVv2Vv2lr1lb9lb9pa9ZW/ZW/aWvWVv2Vv2lr1lb9nbP9/+6fEn/t/LfKzS845eyvpM8H931MuLjox8'
+    'UZsytsH7qf/9845H/b+zZXVUrO9Rnf6fZ7RhVr/637ple9f/f7b/A0VP0E0='
+)
+
+
+def cork_sound_path():
+    folder = Path(tempfile.gettempdir()) / "TeacherTimerSounds"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / "user_cork_pop.wav"
+    if not path.is_file():
+        path.write_bytes(zlib.decompress(base64.b64decode(''.join(_CORK_WAV_ZLIB_B64))))
+    return path
 
 
 def play_alert_sound(name):
@@ -599,7 +830,10 @@ class SettingsDialog(QDialog):
         sound_row = QHBoxLayout()
         sound_row.addWidget(self.alert_sound, 1)
         preview = QPushButton("Preview")
-        preview.clicked.connect(lambda: play_alert_sound(self.alert_sound.currentText()))
+        self.cork_preview = QSoundEffect(self)
+        self.cork_preview.setSource(QUrl.fromLocalFile(str(cork_sound_path())))
+        self.cork_preview.setVolume(0.8)
+        preview.clicked.connect(self.preview_completion_sound)
         sound_row.addWidget(preview)
         form.addRow("Completion sound", sound_row)
         self.final_pips = QCheckBox("Single pip at each of the final 5 seconds")
@@ -655,6 +889,14 @@ class SettingsDialog(QDialog):
         self.startup.setChecked(DEFAULT["start_with_windows"])
         self.restore_top_position = True
         self.accept()
+
+    def preview_completion_sound(self):
+        selected = self.alert_sound.currentText()
+        if selected == "Confetti Pop":
+            self.cork_preview.stop()
+            self.cork_preview.play()
+        else:
+            play_alert_sound(selected)
 
     def update_color_preview(self, key):
         colour = QColor(self.values[key])
@@ -805,6 +1047,102 @@ class FlexibleClockStack(QStackedWidget):
 
     def sizeHint(self):
         return QSize(0, 0)
+
+
+class RedConfetti(QWidget):
+    """Three mode-specific, click-through red confetti animations."""
+    def __init__(self, timer, mode):
+        import random
+        self.mode = mode
+        self.timer_owner = timer
+        self.started = time.monotonic()
+        self.duration = {'top': 3.2, 'float': 1.45, 'full': 3.8}[mode]
+        self.rng = random.Random()
+        if mode == 'full':
+            parent = timer.presentation
+            super().__init__(parent)
+            self.setGeometry(parent.rect())
+            self.origin = None
+        else:
+            super().__init__(None)
+            screen = timer.screen() or QApplication.primaryScreen()
+            screen_rect = screen.geometry()
+            self.setGeometry(screen_rect)
+            local = timer.mapToGlobal(QPoint(0, 0)) - screen_rect.topLeft()
+            self.origin = (local.x(), local.y(), timer.width(), timer.height())
+            self.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint |
+                                Qt.WindowType.WindowStaysOnTopHint |
+                                Qt.WindowType.WindowDoesNotAcceptFocus)
+            self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+        self.pieces = []
+        count = {'top': 85, 'float': 44, 'full': 150}[mode]
+        for _ in range(count):
+            r = self.rng
+            if mode == 'top':
+                ox, oy, w, h = self.origin
+                x = ox + r.uniform(.12, .88) * w
+                y = oy + h - r.uniform(0, 8)
+                vx, vy = r.uniform(-95, 95), r.uniform(15, 110)
+                delay = r.uniform(0, .55)
+            elif mode == 'float':
+                ox, oy, w, h = self.origin
+                x = ox + w * r.uniform(.25, .75)
+                y = oy + h * r.uniform(.25, .75)
+                vx, vy = r.uniform(-220, 220), r.uniform(-260, -45)
+                delay = r.uniform(0, .16)
+            else:
+                x = r.uniform(0, self.width())
+                y = r.uniform(-35, 0)
+                vx, vy = r.uniform(-42, 42), r.uniform(100, 230)
+                delay = r.uniform(0, 1.35)
+            self.pieces.append((x, y, vx, vy, delay, r.uniform(4, 9),
+                                r.uniform(0, 360), r.uniform(-240, 240),
+                                r.choice(('#ff9299', '#ffb5ba', '#ffd6d9', '#ad1425', '#871020', '#6b0b18'))))
+        self.animation = QTimer(self)
+        self.animation.setInterval(25)
+        self.animation.timeout.connect(self.advance)
+        self.animation.start()
+        self.show()
+        self.raise_()
+        if mode == 'float':
+            # The main timer stays above the particles: they puff from behind it.
+            timer.raise_()
+
+    def advance(self):
+        if time.monotonic() - self.started >= self.duration:
+            self.animation.stop()
+            self.close()
+            self.deleteLater()
+        else:
+            self.update()
+
+    def paintEvent(self, event):
+        elapsed = time.monotonic() - self.started
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        for x, y, vx, vy, delay, size, angle, spin, colour_name in self.pieces:
+            age = elapsed - delay
+            if age < 0:
+                continue
+            gravity = 520 if self.mode != 'full' else 65
+            px = x + vx * age
+            py = y + vy * age + .5 * gravity * age * age
+            if py > self.height() + 15 or px < -15 or px > self.width() + 15:
+                continue
+            fade = max(0., min(1., (self.duration - elapsed) / .55))
+            colour = QColor(colour_name)
+            colour.setAlphaF(fade)
+            painter.save()
+            painter.translate(px, py)
+            painter.rotate(angle + spin * age)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(colour)
+            painter.drawRect(QRectF(-size / 2, -size / 3, size, size * .66))
+            painter.restore()
+        painter.end()
 
 
 class PresentationWindow(QWidget):
@@ -1200,6 +1538,9 @@ class TeacherTimer(QWidget):
     def __init__(self):
         super().__init__()
         self.settings = load_settings()
+        self.cork_effect = QSoundEffect(self)
+        self.cork_effect.setSource(QUrl.fromLocalFile(str(cork_sound_path())))
+        self.cork_effect.setVolume(0.8)
         self.duration = self.settings["presets"][0]
         self.remaining = float(self.duration)
         self.deadline = None
@@ -1657,8 +1998,21 @@ class TeacherTimer(QWidget):
             if self.minimized_to_tray:
                 # Bring the completed timer back in Float mode without clearing its alert.
                 self.restore_finished_alert()
+            # Confetti Pop is an easter egg: both the recording and the visual
+            # effect are exclusive to this completion sound selection.
             if self.settings["sound"]:
-                play_alert_sound(self.settings.get("alert_sound", "Double Beep"))
+                selected = self.settings.get("alert_sound", "Double Beep")
+                if selected == "Confetti Pop":
+                    if self.presentation is not None:
+                        RedConfetti(self, 'full')
+                    elif self.docked:
+                        RedConfetti(self, 'top')
+                    else:
+                        RedConfetti(self, 'float')
+                    self.cork_effect.stop()
+                    self.cork_effect.play()
+                else:
+                    play_alert_sound(selected)
             if self.tray.isVisible():
                 self.tray.showMessage("Teacher Timer", "Time's up!", QSystemTrayIcon.MessageIcon.Information, 4000)
         self.refresh()
