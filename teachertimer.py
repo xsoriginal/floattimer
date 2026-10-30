@@ -12,14 +12,14 @@ from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QWidget, QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
     QPushButton, QLabel, QLineEdit, QSpinBox, QDoubleSpinBox, QCheckBox,
-    QColorDialog, QFontComboBox, QDialogButtonBox, QSystemTrayIcon, QMenu,
+    QColorDialog, QFontComboBox, QComboBox, QDialogButtonBox, QSystemTrayIcon, QMenu,
     QMessageBox, QScrollArea, QFrame, QStackedWidget, QSizePolicy, QGraphicsOpacityEffect, QPlainTextEdit
 )
 
 DEFAULT = {
-    "presets": [1, 3, 5, 10, 15], "font": "Segoe UI", "font_size": 100,
+    "presets": [30, 60, 120, 300, 600], "preset_format": 2, "font": "Segoe UI", "font_size": 100,
     "text_color": "#FFFFFF", "background_color": "#101820",
-    "accent_color": "#43E5AD", "opacity": 94, "always_on_top": True,
+    "accent_color": "#43E5AD", "opacity": 90, "always_on_top": True,
     "sound": True, "start_with_windows": False, "x": None, "y": None, "width": None, "height": None,
 }
 
@@ -71,8 +71,25 @@ def load_settings():
             result.update({k: v for k, v in stored.items() if k in DEFAULT})
     except (OSError, ValueError, TypeError):
         pass
-    result["presets"] = [int(x) for x in result["presets"] if 0 < int(x) <= 999][:5] or [5]
+    # Old settings stored whole minutes. Convert once in memory, then persist
+    # the new seconds-based format when settings are next saved.
+    try:
+        values = result["presets"]
+        if not isinstance(values, list):
+            raise ValueError()
+        values = [int(x) for x in values]
+        if result.get("preset_format") != 2:
+            values = [x * 60 for x in values]
+        result["presets"] = [x for x in values if 1 <= x <= 59940][:5] or list(DEFAULT["presets"])
+    except (ValueError, TypeError):
+        result["presets"] = list(DEFAULT["presets"])
+    result["preset_format"] = 2
     return result
+
+
+def preset_label(seconds):
+    """Use a short label that is unambiguous for second-based presets."""
+    return f"{seconds // 60}m" if seconds % 60 == 0 else f"{seconds}s" if seconds < 60 else f"{seconds // 60}m {seconds % 60}s"
 
 
 def save_settings(settings):
@@ -318,21 +335,63 @@ class SettingsDialog(QDialog):
         scroll.setWidgetResizable(True)
         content = QWidget()
         layout = QVBoxLayout(content)
-        layout.addWidget(QLabel("Presets (minutes, one per line)"))
-        self.presets = QLineEdit(", ".join(map(str, settings["presets"])))
-        self.presets.setPlaceholderText("1, 3, 5, 10, 15")
-        layout.addWidget(self.presets)
-        layout.addWidget(QLabel("Separate preset durations with commas. Maximum 5."))
+        layout.addWidget(QLabel("Countdown presets"))
+        layout.addWidget(QLabel("Choose a duration and unit for each of the five buttons."))
+        self.preset_inputs = []
+        for index, seconds in enumerate(settings["presets"][:5]):
+            preset_row = QHBoxLayout()
+            preset_row.addWidget(QLabel(f"Preset {index + 1}"))
+            value = QSpinBox()
+            value.setRange(1, 999)
+            unit = QComboBox()
+            unit.addItems(["Seconds", "Minutes"])
+            if seconds % 60 == 0:
+                unit.setCurrentIndex(1)
+                value.setValue(seconds // 60)
+            else:
+                unit.setCurrentIndex(0)
+                value.setValue(seconds)
+            preset_row.addWidget(value, 1)
+            preset_row.addWidget(unit, 1)
+            layout.addLayout(preset_row)
+            self.preset_inputs.append((value, unit))
+        # All normal settings have five entries, but fill any older partial list.
+        for index in range(len(self.preset_inputs), 5):
+            preset_row = QHBoxLayout()
+            preset_row.addWidget(QLabel(f"Preset {index + 1}"))
+            value = QSpinBox()
+            value.setRange(1, 999)
+            value.setValue(DEFAULT["presets"][index] // 60 if DEFAULT["presets"][index] % 60 == 0 else DEFAULT["presets"][index])
+            unit = QComboBox()
+            unit.addItems(["Seconds", "Minutes"])
+            unit.setCurrentIndex(1 if DEFAULT["presets"][index] % 60 == 0 else 0)
+            preset_row.addWidget(value, 1)
+            preset_row.addWidget(unit, 1)
+            layout.addLayout(preset_row)
+            self.preset_inputs.append((value, unit))
         form = QFormLayout()
         self.font = QFontComboBox()
         self.font.setCurrentFont(QFont(settings["font"]))
         form.addRow("Countdown font", self.font)
         self.colors = {}
+        self.color_previews = {}
         for key, label in (("text_color", "Text colour"), ("background_color", "Background colour"), ("accent_color", "Accent colour")):
-            b = QPushButton(settings[key])
-            self.colors[key] = b
-            b.clicked.connect(lambda _=False, k=key: self.choose_color(k))
-            form.addRow(label, b)
+            color_row = QHBoxLayout()
+            color_row.setContentsMargins(0, 0, 0, 0)
+            color_row.setSpacing(8)
+            button = QPushButton(self.values[key])
+            button.clicked.connect(lambda _=False, k=key: self.choose_color(k))
+            color_row.addWidget(button, 1)
+            preview = QPushButton()
+            preview.setFixedSize(32, 28)
+            preview.setToolTip(f"Choose {label.lower()}")
+            preview.setAccessibleName(f"Choose {label.lower()} from colour preview")
+            preview.clicked.connect(lambda _=False, k=key: self.choose_color(k))
+            color_row.addWidget(preview)
+            self.colors[key] = button
+            self.color_previews[key] = preview
+            self.update_color_preview(key)
+            form.addRow(label, color_row)
         self.opacity = QSpinBox()
         self.opacity.setRange(20, 100)
         self.opacity.setSuffix("%")
@@ -365,21 +424,27 @@ class SettingsDialog(QDialog):
         buttons.rejected.connect(self.reject)
         outer.addWidget(buttons)
 
+    def update_color_preview(self, key):
+        colour = QColor(self.values[key])
+        if not colour.isValid():
+            return
+        self.color_previews[key].setStyleSheet(
+            "QPushButton { background-color: " + colour.name() + "; "
+            "border: 1px solid #888; border-radius: 4px; } "
+            "QPushButton:hover { border: 2px solid #dddddd; }"
+        )
+
     def choose_color(self, key):
         color = QColorDialog.getColor(QColor(self.values[key]), self, "Choose colour")
         if color.isValid():
             self.values[key] = color.name()
             self.colors[key].setText(color.name())
+            self.update_color_preview(key)
 
     def accept(self):
-        try:
-            entries = [int(x.strip()) for x in self.presets.text().split(",") if x.strip()]
-            if not entries or len(entries) > 5 or any(x < 1 or x > 999 for x in entries):
-                raise ValueError()
-        except ValueError:
-            show_front_warning(self, "Invalid presets", "Enter 1–5 comma-separated whole numbers between 1 and 999.")
-            return
-        self.values.update(presets=entries, font=self.font.currentFont().family(),
+        entries = [value.value() * (60 if unit.currentIndex() == 1 else 1)
+                   for value, unit in self.preset_inputs]
+        self.values.update(presets=entries, preset_format=2, font=self.font.currentFont().family(),
                            opacity=self.opacity.value(),
                            always_on_top=self.top.isChecked(), sound=self.sound.isChecked(),
                            start_with_windows=self.startup.isChecked())
@@ -523,8 +588,8 @@ class PresentationWindow(QWidget):
             bottom.addWidget(control)
         bottom.addStretch(1)
         self.preset_buttons = []
-        for minutes in timer.settings['presets'][:5]:
-            preset = button(f'{minutes}m', lambda checked=False, m=minutes: timer.select_preset(m), 'fullscreenPreset')
+        for seconds in timer.settings['presets'][:5]:
+            preset = button(preset_label(seconds), lambda checked=False, s=seconds: timer.select_preset(s), 'fullscreenPreset')
             preset.setFixedHeight(64)
             preset.setMinimumWidth(0)
             preset.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
@@ -702,7 +767,7 @@ class TeacherTimer(QWidget):
     def __init__(self):
         super().__init__()
         self.settings = load_settings()
-        self.duration = self.settings["presets"][0] * 60
+        self.duration = self.settings["presets"][0]
         self.remaining = float(self.duration)
         self.deadline = None
         self.running = False
@@ -827,7 +892,7 @@ class TeacherTimer(QWidget):
         baseline = QFont(self.settings["font"])
         baseline.setBold(True)
         baseline.setPixelSize(100)
-        needs_hours = max(self.settings["presets"]) >= 60 or self.duration >= 3600
+        needs_hours = max(self.settings["presets"]) >= 3600 or self.duration >= 3600
         self._hours_layout = needs_hours
         template = "88:88:88" if needs_hours else "88:88"
         fm = QFontMetrics(font)
@@ -875,17 +940,17 @@ class TeacherTimer(QWidget):
     def rebuild_tray_menu(self):
         """Refresh the tray choices from the current configured presets."""
         self.tray_menu.clear()
-        for minutes in self.settings["presets"]:
+        for seconds in self.settings["presets"]:
             self.tray_menu.addAction(
-                f"{minutes}m",
-                lambda checked=False, m=minutes: self.start_tray_preset(m)
+                preset_label(seconds),
+                lambda checked=False, s=seconds: self.start_tray_preset(s)
             )
 
-    def start_tray_preset(self, minutes):
+    def start_tray_preset(self, seconds):
         """Open the main window and start the selected countdown immediately."""
         if self.presentation is not None:
             self.exit_presentation()
-        self.select_preset(minutes)
+        self.select_preset(seconds)
         self.show_normal()
         self.toggle()
 
@@ -957,8 +1022,8 @@ class TeacherTimer(QWidget):
             if item.widget():
                 item.widget().deleteLater()
         self.preset_buttons = []
-        for minutes in self.settings["presets"]:
-            b = button(f"{minutes}m", lambda _=False, m=minutes: self.select_preset(m), "preset")
+        for seconds in self.settings["presets"]:
+            b = button(preset_label(seconds), lambda _=False, s=seconds: self.select_preset(s), "preset")
             font = QFont(self.settings["font"])
             font.setPixelSize(20)
             font.setBold(True)
@@ -966,16 +1031,16 @@ class TeacherTimer(QWidget):
             b.setMinimumWidth(76)
             b.setMinimumHeight(43)
             self.preset_box.addWidget(b)
-            self.preset_buttons.append((minutes, b))
+            self.preset_buttons.append((seconds, b))
         self.preset_box.addStretch()
         self.refresh()
 
-    def select_preset(self, minutes):
+    def select_preset(self, seconds):
         self.running = False
         self.deadline = None
         self.finished = False
         self.mark_new_time()
-        self.duration = minutes * 60
+        self.duration = seconds
         self.remaining = float(self.duration)
         self.scale_clock()
         self.refresh()
