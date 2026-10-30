@@ -6,7 +6,7 @@ import sys
 import time
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, QPoint, Signal, QPropertyAnimation, QEasingCurve, QEvent
+from PySide6.QtCore import Qt, QTimer, QPoint, QSize, Signal, QPropertyAnimation, QEasingCurve, QEvent
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPainter, QPixmap, QPen, QBrush, QFontMetrics, QPainterPath
 from PySide6.QtWidgets import (
@@ -182,8 +182,10 @@ class IconButton(QPushButton):
             # The arc ends at 155 degrees, near (-9.97, -4.65).
             # Draw the two arms into that endpoint, without a filled triangle.
             tip = QPointF(-9.97, -4.65)
-            painter.drawLine(QPointF(-10.5, -11.0), tip)
-            painter.drawLine(tip, QPointF(-4.8, -2.7))
+            # A square, 90-degree arrowhead: one arm points straight up,
+            # and the other points straight right from the arc endpoint.
+            painter.drawLine(QPointF(tip.x(), tip.y() - 6.5), tip)
+            painter.drawLine(tip, QPointF(tip.x() + 6.5, tip.y()))
         elif k in ("fullscreen", "exit_fullscreen"):
             # Four clean square corners; exit points the brackets inward.
             d = 9 if k == "fullscreen" else 5
@@ -406,6 +408,15 @@ class ProgressStrip(QWidget):
         painter.end()
 
 
+class FlexibleClockStack(QStackedWidget):
+    """Do not let the large countdown font dictate the window's minimum width."""
+    def minimumSizeHint(self):
+        return QSize(0, 0)
+
+    def sizeHint(self):
+        return QSize(0, 0)
+
+
 class PresentationWindow(QWidget):
     """Fullscreen view sharing countdown state and the main window's icons."""
     def __init__(self, timer):
@@ -447,12 +458,14 @@ class PresentationWindow(QWidget):
         self.content_row = QHBoxLayout()
         self.content_row.setContentsMargins(32, 0, 24, 0)
         self.content_row.setSpacing(24)
-        self.display_stack = QStackedWidget()
+        self.display_stack = FlexibleClockStack()
         self.display = QPushButton()
         self.display.setObjectName('fullscreenDisplay')
         self.display.setCursor(Qt.CursorShape.PointingHandCursor)
         self.display.setToolTip('Click to enter a time as MMSS')
         self.display.clicked.connect(self.edit_time)
+        self.display.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        self.display.setMinimumSize(0, 0)
         self.display_stack.addWidget(self.display)
         self.time_input = QLineEdit()
         self.time_input.setObjectName('fullscreenTimeInput')
@@ -460,6 +473,8 @@ class PresentationWindow(QWidget):
         self.time_input.setMaxLength(4)
         self.time_input.setToolTip('Type four digits MMSS, then Enter')
         self.time_input.returnPressed.connect(self.commit_time)
+        self.time_input.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        self.time_input.setMinimumSize(0, 0)
         self.display_stack.addWidget(self.time_input)
         self.display_stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         # The clock must yield space to the protected instructions column.
@@ -492,8 +507,7 @@ class PresentationWindow(QWidget):
         panel_layout.addLayout(tools)
         self.instructions_panel.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
         self.content_row.addWidget(self.instructions_panel, 0)
-        # Reserve one quarter of the actual usable width, not the clock's size hint.
-        self.update_content_widths()
+        # No fixed widths before the fullscreen geometry is established.
         self.instructions_panel.hide()
         layout.addLayout(self.content_row, 1)
         layout.addSpacing(18)
@@ -512,28 +526,30 @@ class PresentationWindow(QWidget):
         for minutes in timer.settings['presets'][:5]:
             preset = button(f'{minutes}m', lambda checked=False, m=minutes: timer.select_preset(m), 'fullscreenPreset')
             preset.setFixedHeight(64)
-            preset.setMinimumWidth(65)
+            preset.setMinimumWidth(0)
+            preset.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
             font = QFont(timer.settings['font'])
             font.setPixelSize(22)
             font.setBold(True)
             preset.setFont(font)
-            bottom.addWidget(preset)
+            bottom.addWidget(preset, 1)
             self.preset_buttons.append(preset)
         layout.addLayout(bottom)
         self.apply_theme()
         QApplication.instance().installEventFilter(self)
 
     def update_content_widths(self):
-        margins = self.content_row.contentsMargins()
-        usable = max(0, self.width() - margins.left() - margins.right())
+        """Reserve the right quarter without allowing the clock to enlarge the window."""
+        self.display_stack.setMinimumWidth(0)
+        self.display_stack.setMaximumWidth(16777215)
         if self.instructions_panel.isVisible():
-            notes_width = round(usable * 0.25)
-            clock_width = max(0, usable - notes_width - self.content_row.spacing())
+            margins = self.content_row.contentsMargins()
+            usable = max(0, self.width() - margins.left() - margins.right()
+                         - self.content_row.spacing())
+            notes_width = max(0, usable // 4)
             self.instructions_panel.setFixedWidth(notes_width)
-            self.display_stack.setFixedWidth(clock_width)
-        else:
-            self.display_stack.setMinimumWidth(0)
-            self.display_stack.setMaximumWidth(16777215)
+        # The remaining space is allocated to the clock by the layout.
+        # Never set a fixed width on the clock: its large text must shrink to fit.
 
     def toggle_instructions(self):
         self.instructions_panel.setVisible(not self.instructions_panel.isVisible())
