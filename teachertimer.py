@@ -25,12 +25,12 @@ DEFAULT = {
     "presets": [30, 60, 120, 300, 600], "preset_format": 2, "font": "Segoe UI", "font_size": 100,
     "text_color": "#000000", "background_color": "#DDA64B",
     "accent_color": "#43E5AD", "opacity": 95, "always_on_top": True,
-    "sound": True, "alert_sound": "Soft chime", "final_pips": False, "start_with_windows": False, "x": None, "y": None, "width": None, "height": None,
+    "sound": False, "alert_sound": "Double Beep", "final_pips": False, "start_with_windows": False, "x": None, "y": None, "width": None, "height": None,
 }
 
 
 # Original, synthesised classroom alert sounds; no external sound files required.
-ALERT_SOUNDS = ("Classic bell", "Soft chime", "Gentle tone", "Digital beep", "Silent")
+ALERT_SOUNDS = ("Bell", "Double Beep", "Playful Upward")
 _AUDIO_CACHE = {}
 
 
@@ -39,14 +39,13 @@ def _synth_sound(name):
     if name in _AUDIO_CACHE:
         return _AUDIO_CACHE[name]
     rate = 22050
-    length = {"Classic bell": 2.1, "Soft chime": 1.35, "Gentle tone": 1.1,
-              "Digital beep": 0.65, "Final pip": 0.13}.get(name, 0)
+    length = {"Bell": 2.1, "Double Beep": 0.65, "Playful Upward": 1.35, "Final pip": 0.13}.get(name, 0)
     if not length:
         return None
     samples = []
     for i in range(int(rate * length)):
         t = i / rate
-        if name == "Classic bell":
+        if name == "Bell":
             # Inharmonic partials and individually decaying resonances approximate
             # a struck brass bell, rather than a pitched electronic sine tone.
             strike = min(1.0, t / .0025)
@@ -60,16 +59,21 @@ def _synth_sound(name):
             ) * .39
             # A very brief, soft high-frequency strike gives the bell definition.
             signal += .065 * math.exp(-85 * t) * math.sin(2 * math.pi * 3900 * t)
-        elif name == "Soft chime":
-            signal = 0
-            for start, freq in ((0, 659.25), (.32, 783.99), (.64, 987.77)):
-                dt = t - start
-                if dt >= 0:
-                    signal += .30 * min(1, dt / .025) * math.exp(-5 * dt) * (math.sin(2 * math.pi * freq * dt) + .12 * math.sin(2 * math.pi * freq * 2 * dt))
-        elif name == "Gentle tone":
-            env = min(1, t / .20, (length - t) / .35)
-            signal = .30 * max(0, env) * (math.sin(2 * math.pi * 523.25 * t) + .14 * math.sin(2 * math.pi * 1046.5 * t))
-        elif name == "Digital beep":
+        elif name == "Playful Upward":
+            # Bright, rising C-E-G-C flourish with a gently ringing final note.
+            notes = ((0.00, .20, 523.25), (.19, .20, 659.25),
+                     (.38, .21, 783.99), (.60, .66, 1046.50))
+            signal = 0.0
+            for start, duration, freq in notes:
+                age = t - start
+                if 0 <= age < duration + .18:
+                    attack = min(1.0, age / .009)
+                    decay = math.exp(-3.0 * max(0.0, age - .07))
+                    tail = min(1.0, max(0.0, (duration + .18 - age) / .12))
+                    signal += .21 * attack * decay * tail * (
+                        math.sin(2 * math.pi * freq * age) +
+                        .16 * math.sin(2 * math.pi * 2 * freq * age))
+        elif name == "Double Beep":
             pulse = (0 <= t < .16) or (.30 <= t < .46)
             phase = t if t < .30 else t - .30
             env = min(1, phase / .012, (.16 - phase) / .025) if pulse else 0
@@ -91,8 +95,6 @@ def _synth_sound(name):
 
 
 def play_alert_sound(name):
-    if name == "Silent":
-        return
     try:
         path = _synth_sound(name)
         if sys.platform == "win32":
@@ -178,6 +180,11 @@ def load_settings():
             result.update({k: v for k, v in stored.items() if k in DEFAULT})
     except (OSError, ValueError, TypeError):
         pass
+    # Preserve existing choices under their new names; removed choices fall back to the default.
+    sound_names = {"Classic bell": "Bell", "Digital beep": "Double Beep", "Silent": "Double Beep"}
+    selected_sound = result.get("alert_sound", DEFAULT["alert_sound"])
+    selected_sound = sound_names.get(selected_sound, selected_sound)
+    result["alert_sound"] = selected_sound if selected_sound in ALERT_SOUNDS else DEFAULT["alert_sound"]
     # Old settings stored whole minutes. Convert once in memory, then persist
     # the new seconds-based format when settings are next saved.
     try:
@@ -278,21 +285,6 @@ def tray_icon():
     if icon.isNull():
         raise FileNotFoundError(f"Teacher Timer tray icon is missing: {path}")
     return icon
-
-def running_tray_icon():
-    """Use a native multi-resolution ICO matching the normal tray icon.
-
-    Qt-generated pixmaps may have different scaling, alignment, or DPI
-    behaviour from Windows' native ICO selection. Both icons must be
-    bundled as ICO resources using the same frame sizes and alpha masks.
-    """
-    path = resource_path("TeacherTimer-Tray-Running.ico")
-    if not path.is_file():
-        # Never display a mismatched icon if the optional asset was omitted.
-        return tray_icon()
-    icon = QIcon(str(path))
-    return icon if not icon.isNull() else tray_icon()
-
 
 def button(label, callback, name="control"):
     b = QPushButton(label)
@@ -567,12 +559,12 @@ class SettingsDialog(QDialog):
         self.top = QCheckBox("Keep timer above other windows")
         self.top.setChecked(settings["always_on_top"])
         form.addRow(self.top)
-        self.sound = QCheckBox("Play alert when finished")
+        self.sound = QCheckBox("Play sound when finished")
         self.sound.setChecked(settings["sound"])
         form.addRow(self.sound)
         self.alert_sound = QComboBox()
         self.alert_sound.addItems(ALERT_SOUNDS)
-        self.alert_sound.setCurrentText(settings.get("alert_sound", "Soft chime"))
+        self.alert_sound.setCurrentText(settings.get("alert_sound", "Double Beep"))
         sound_row = QHBoxLayout()
         sound_row.addWidget(self.alert_sound, 1)
         preview = QPushButton("Preview")
@@ -1328,19 +1320,9 @@ class TeacherTimer(QWidget):
             self.tray.show()
             self.tray.setIcon(tray_icon())
 
-    def update_tray_icon(self):
-        if not hasattr(self, 'tray'):
-            return
-        active = self.minimized_to_tray and self.running
-        if getattr(self, '_tray_running_icon', None) == active:
-            return
-        self.tray.setIcon(running_tray_icon() if active else tray_icon())
-        self._tray_running_icon = active
-
     def minimize_to_tray(self):
         self.minimized_to_tray = True
         self.hide()
-        self.update_tray_icon()
 
     def rebuild_tray_menu(self):
         """Refresh the tray choices from the current configured presets."""
@@ -1562,7 +1544,6 @@ class TeacherTimer(QWidget):
                     self.presentation.show_progress()
             self.deadline = time.monotonic() + self.remaining
             self.running = True
-        self.update_tray_icon()
         self.refresh()
 
     def reset(self):
@@ -1572,7 +1553,6 @@ class TeacherTimer(QWidget):
         self.finished = False
         self.last_pip_second = None
         self.mark_new_time()
-        self.update_tray_icon()
         self.refresh()
 
     def tick(self):
@@ -1598,9 +1578,8 @@ class TeacherTimer(QWidget):
             if self.minimized_to_tray:
                 # Bring the completed timer back in Float mode without clearing its alert.
                 self.restore_finished_alert()
-            self.update_tray_icon()
             if self.settings["sound"]:
-                play_alert_sound(self.settings.get("alert_sound", "Soft chime"))
+                play_alert_sound(self.settings.get("alert_sound", "Double Beep"))
             if self.tray.isVisible():
                 self.tray.showMessage("Teacher Timer", "Time's up!", QSystemTrayIcon.MessageIcon.Information, 4000)
         self.refresh()
@@ -1742,11 +1721,9 @@ class TeacherTimer(QWidget):
         self.show()
         self.raise_()
         self.activateWindow()
-        self.update_tray_icon()
 
     def show_normal(self):
         self.minimized_to_tray = False
-        self.update_tray_icon()
         self.clear_alert()
         if self.docked:
             self.toggle_dock()
