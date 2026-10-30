@@ -502,6 +502,44 @@ class ProgressStrip(QWidget):
         painter.end()
 
 
+class FixedSlotClock(QPushButton):
+    """Draw every digit in an equal-width cell; colons have their own fixed cells."""
+    def __init__(self, label=''):
+        super().__init__(label)
+        self.clock_colour = QColor('#ffffff')
+
+    def set_clock_colour(self, colour):
+        self.clock_colour = QColor(colour)
+        self.update()
+
+    @staticmethod
+    def slot_widths(font, label):
+        metrics = QFontMetrics(font)
+        digit = max(metrics.horizontalAdvance(str(n)) for n in range(10))
+        colon = metrics.horizontalAdvance(':')
+        return [digit if char != ':' else colon for char in label]
+
+    @classmethod
+    def text_width(cls, font, label):
+        return sum(cls.slot_widths(font, label))
+
+    def paintEvent(self, event):
+        # Don't let QPushButton centre a proportional text string as a whole.
+        # Every character's centre is independent of its glyph's actual width.
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        painter.setFont(self.font())
+        painter.setPen(self.clock_colour)
+        label = self.text()
+        widths = self.slot_widths(self.font(), label)
+        left = (self.width() - sum(widths)) / 2
+        for char, cell in zip(label, widths):
+            painter.drawText(QRectF(left, 0, cell, self.height()),
+                             Qt.AlignmentFlag.AlignCenter, char)
+            left += cell
+        painter.end()
+
+
 class FlexibleClockStack(QStackedWidget):
     """Do not let the large countdown font dictate the window's minimum width."""
     def minimumSizeHint(self):
@@ -553,7 +591,7 @@ class PresentationWindow(QWidget):
         self.content_row.setContentsMargins(32, 0, 24, 0)
         self.content_row.setSpacing(24)
         self.display_stack = FlexibleClockStack()
-        self.display = QPushButton()
+        self.display = FixedSlotClock()
         self.display.setObjectName('fullscreenDisplay')
         self.display.setCursor(Qt.CursorShape.PointingHandCursor)
         self.display.setToolTip('Click to enter a time as MMSS')
@@ -662,8 +700,8 @@ class PresentationWindow(QWidget):
         # relied on to recalculate its font after the notes panel closes.
         self.content_row.invalidate()
         self.layout().activate()
-        self.update_clock()
-        QTimer.singleShot(0, self.update_clock)
+        self.fit_clock_font()
+        QTimer.singleShot(0, self.fit_clock_font)
 
     def apply_instructions_font(self):
         font = QFont(self.timer.settings['font'])
@@ -767,7 +805,9 @@ class PresentationWindow(QWidget):
             QPlainTextEdit#instructionsEditor {{ color: {foreground}; background: transparent; border: none; selection-background-color: {s['accent_color']}; }}
 
         """)
+        self.display.set_clock_colour(foreground)
         self.apply_instructions_font()
+        self.fit_clock_font()
         self.update_clock()
         self.update()
         for control in (self.instructions_toggle, self.text_smaller, self.text_larger, self.text_clear,
@@ -775,20 +815,33 @@ class PresentationWindow(QWidget):
                         self.plus_button, self.exit_button):
             control.update()
 
-    def update_clock(self):
-        label = self.timer.format_time()
-        self.display.setText(label)
+    def fit_clock_font(self):
+        """Size once for the widest possible clock, not the current digits."""
         font = QFont(self.settings['font'])
         font.setBold(True)
         available_width = max(100, self.display_stack.width() - 64)
         available_height = max(100, self.display_stack.height() * .8)
         size = max(30, min(int(available_height), 500))
-        font.setPixelSize(size)
-        while size > 30 and QFontMetrics(font).horizontalAdvance(label) > available_width:
-            size -= 4
+        # Each digit position is allocated the width of the widest numeral.
+        # This avoids changes in font size when, e.g., 11 becomes 10.
+        groups = 3 if max(self.timer.duration, self.timer.remaining) >= 3600 else 2
+        while size > 30:
             font.setPixelSize(size)
+            metrics = QFontMetrics(font)
+            widest_digit = max(metrics.horizontalAdvance(str(i)) for i in range(10))
+            worst_width = FixedSlotClock.text_width(font, '88:88:88' if groups == 3 else '88:88')
+            if worst_width <= available_width:
+                break
+            size -= 4
+        font.setPixelSize(size)
         self.display.setFont(font)
         self.time_input.setFont(font)
+
+    def update_clock(self):
+        label = self.timer.format_time()
+        if label.count(':') != self.display.text().count(':'):
+            self.fit_clock_font()
+        self.display.setText(label)
         self.play_button.kind = 'pause' if self.timer.running else 'play'
         self.play_button.update()
         self.progress.update()
@@ -796,6 +849,7 @@ class PresentationWindow(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self.update_content_widths()
+        self.fit_clock_font()
         self.update_clock()
 
     def keyPressEvent(self, event):
@@ -904,7 +958,7 @@ class TeacherTimer(QWidget):
         left = QVBoxLayout()
         self.display_stack = QStackedWidget()
         self.display_stack.setMinimumWidth(210)
-        self.display = QPushButton("05:00")
+        self.display = FixedSlotClock("05:00")
         self.display.setObjectName("display")
         self.display.setToolTip("Click to enter four digits as MMSS (e.g. 0530)")
         self.display.clicked.connect(self.edit_time)
@@ -942,7 +996,7 @@ class TeacherTimer(QWidget):
         self.preset_box.setSpacing(6)
         body.addLayout(self.preset_box)
         # The complete interface is hidden in dock mode, leaving only a clickable time.
-        self.dock_display = QPushButton("05:00")
+        self.dock_display = FixedSlotClock("05:00")
         self.dock_display.setObjectName("dockDisplay")
         self.dock_display.setToolTip("Click to restore the full timer")
         self.dock_display.clicked.connect(self.toggle_dock)
@@ -967,7 +1021,7 @@ class TeacherTimer(QWidget):
         template = "88:88:88" if needs_hours else "88:88"
         fm = QFontMetrics(font)
         base_fm = QFontMetrics(baseline)
-        clock_width = max(fm.horizontalAdvance(template), base_fm.horizontalAdvance(template)) + 30
+        clock_width = max(FixedSlotClock.text_width(font, template), FixedSlotClock.text_width(baseline, template)) + 30
         clock_height = max(fm.height(), base_fm.height()) + 20
         self.display_stack.setFixedSize(clock_width, clock_height)
         self.display.setFont(font)
@@ -986,7 +1040,7 @@ class TeacherTimer(QWidget):
         dock_font.setPixelSize(48)
         self.dock_display.setFont(dock_font)
         dock_metrics = QFontMetrics(dock_font)
-        self.dock_display.setFixedSize(dock_metrics.horizontalAdvance(template) + 24,
+        self.dock_display.setFixedSize(FixedSlotClock.text_width(dock_font, template) + 24,
                                        dock_metrics.height() + 12)
 
     def make_tray(self):
@@ -1079,6 +1133,8 @@ class TeacherTimer(QWidget):
             QPushButton#play:hover {{ background: {button_hover}; }}
             QPushButton#topButton, QPushButton#topButton:hover {{ background: {top_bg}; padding: 0px; }}
         """)
+        self.display.set_clock_colour(foreground)
+        self.dock_display.set_clock_colour(foreground)
         # Docked display is a sibling of panel, so style it independently.
         dock_bg = QColor("#e5404b" if self.alert_active else s["background_color"])
         dock_bg.setAlphaF(0.80)
@@ -1214,7 +1270,7 @@ class TeacherTimer(QWidget):
         seconds = max(0, int(self.remaining + 0.999))
         hours, rest = divmod(seconds, 3600)
         minutes, secs = divmod(rest, 60)
-        return f"{hours:02}:{minutes:02}:{secs:02}" if hours else f"{minutes:02}:{secs:02}"
+        return f"{hours:02}:{minutes:02}:{secs:02}" if (hours or self.duration >= 3600) else f"{minutes:02}:{secs:02}"
 
     def toggle(self):
         if self.running:
