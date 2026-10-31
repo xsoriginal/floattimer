@@ -1863,7 +1863,10 @@ class TeacherTimer(QWidget):
         if self.settings["x"] is not None and self.settings["y"] is not None:
             self.move(int(self.settings["x"]), int(self.settings["y"]))
         self.clock = QTimer(self)
-        self.clock.setInterval(80)
+        # 80 ms polling makes second-boundary pips sound uneven.
+        # A precise 20 ms timer keeps the five countdown strikes aligned.
+        self.clock.setTimerType(Qt.TimerType.PreciseTimer)
+        self.clock.setInterval(20)
         self.clock.timeout.connect(self.tick)
         self.clock.start()
         self.refresh()
