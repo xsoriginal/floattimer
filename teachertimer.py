@@ -44,7 +44,7 @@ def _synth_sound(name):
     if name in ("Final pip", "Double Beep"):
         return _woodblock_sound(name)
     rate = 22050
-    length = {"Bell": 2.1, "Double Beep": 0.65, "Playful Upward": 1.35, "Final pip": 0.13}.get(name, 0)
+    length = {"Bell": 2.1, "Double Beep": 0.65, "Playful Upward": 1.40, "Final pip": 0.13}.get(name, 0)
     if not length:
         return None
     samples = []
@@ -65,20 +65,19 @@ def _synth_sound(name):
             # A very brief, soft high-frequency strike gives the bell definition.
             signal += .065 * math.exp(-85 * t) * math.sin(2 * math.pi * 3900 * t)
         elif name == "Playful Upward":
-            # Warm, rounded rising flourish: softened attacks, lower register,
-            # almost pure sine tones and gentle overlapping decays.
-            notes = ((0.00, .22, 466.16), (.20, .22, 587.33),
-                     (.40, .23, 698.46), (.63, .66, 932.33))
+            # Soft, rounded ascending four-note flourish. Lower register,
+            # overlapping notes, slow attacks, no bright upper harmonics.
+            notes = ((0.00, .32, 349.23), (.23, .34, 440.00),
+                     (.47, .36, 523.25), (.73, .63, 659.25))
             signal = 0.0
             for start, duration, freq in notes:
                 age = t - start
-                if 0 <= age < duration + .18:
-                    attack = min(1.0, age / .035)
-                    decay = math.exp(-2.5 * max(0.0, age - .09))
-                    tail = min(1.0, max(0.0, (duration + .18 - age) / .17))
-                    signal += .18 * attack * decay * tail * (
-                        math.sin(2 * math.pi * freq * age) +
-                        .045 * math.sin(2 * math.pi * 2 * freq * age))
+                if 0 <= age < duration:
+                    attack = min(1.0, age / .065)
+                    release = min(1.0, (duration - age) / .19)
+                    # Raised-cosine envelope avoids sharp transitions.
+                    env = (math.sin(math.pi * .5 * attack) ** 2) * (math.sin(math.pi * .5 * release) ** 2)
+                    signal += .145 * env * math.sin(2 * math.pi * freq * age)
         elif name == "Double Beep":
             pulse = (0 <= t < .16) or (.30 <= t < .46)
             phase = t if t < .30 else t - .30
@@ -90,7 +89,7 @@ def _synth_sound(name):
         samples.append(struct.pack('<h', int(max(-1, min(1, signal)) * 32767)))
     folder = Path(tempfile.gettempdir()) / "TeacherTimerSounds"
     folder.mkdir(parents=True, exist_ok=True)
-    file = folder / (name.lower().replace(' ', '_') + '.wav')
+    file = folder / (name.lower().replace(' ', '_') + ('_smooth_v2.wav' if name == 'Playful Upward' else '.wav'))
     with wave.open(str(file), 'wb') as wav:
         wav.setnchannels(1)
         wav.setsampwidth(2)
@@ -1316,8 +1315,39 @@ class RedConfetti(QWidget):
             timer_pos = timer.mapToGlobal(QPoint(timer.width() // 2, timer.height() // 2))
             screen = QApplication.screenAt(timer_pos) or timer.screen() or QApplication.primaryScreen()
             screen_rect = screen.geometry()
-            self.setGeometry(screen_rect)
-            local = timer.mapToGlobal(QPoint(0, 0)) - screen_rect.topLeft()
+            # Keep the overlay LOCAL to the timer rather than creating a
+            # monitor-sized topmost window. Windows Focus Assist / DND can
+            # interpret full-monitor overlays as fullscreen applications.
+            # A narrow vertical strip works for Top; Float gets a bounded
+            # burst area. Neither mode ever creates a fullscreen overlay.
+            from PySide6.QtCore import QRect
+            timer_global = timer.mapToGlobal(QPoint(0, 0))
+            screen_left, screen_top = screen_rect.left(), screen_rect.top()
+            screen_right = screen_left + screen_rect.width()
+            screen_bottom = screen_top + screen_rect.height()
+            center_x = timer_global.x() + timer.width() // 2
+            center_y = timer_global.y() + timer.height() // 2
+            if mode == 'top':
+                # Full-height falling stream, but only a limited width.
+                width = min(max(timer.width() + 420, 480),
+                            max(1, int(screen_rect.width() * .78)))
+                height = max(1, screen_rect.height() - 12)
+                left = center_x - width // 2
+                top = screen_top + 6
+            else:
+                # Wide burst, while keeping the transparent window
+                # substantially smaller than the monitor in both axes.
+                width = min(max(timer.width() + 900, 720),
+                            max(1, int(screen_rect.width() * .84)))
+                height = min(max(timer.height() + 700, 600),
+                             max(1, int(screen_rect.height() * .84)))
+                left = center_x - width // 2
+                top = center_y - height // 2
+            left = max(screen_left, min(left, screen_right - width))
+            top = max(screen_top, min(top, screen_bottom - height))
+            overlay_rect = QRect(left, top, width, height)
+            self.setGeometry(overlay_rect)
+            local = timer_global - overlay_rect.topLeft()
             self.origin = (local.x(), local.y(), timer.width(), timer.height())
             self.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint |
                                 Qt.WindowType.WindowStaysOnTopHint |
