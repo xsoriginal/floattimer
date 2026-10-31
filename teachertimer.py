@@ -3378,6 +3378,12 @@ class TeacherTimer(QWidget):
         self.apply_settings()
         if self.settings["x"] is not None and self.settings["y"] is not None:
             self.move(int(self.settings["x"]), int(self.settings["y"]))
+        # Prepare the woodblock WAV before any countdown begins. Previously
+        # the first five-second pip performed decompression, PCM processing,
+        # and disk I/O on the UI thread, delaying that strike specifically.
+        # Subsequent strikes used the cached file and sounded more punctual.
+        if self.settings.get("final_pips", False):
+            _synth_sound("Final pip")
         self.clock = QTimer(self)
         # 80 ms polling makes second-boundary pips sound uneven.
         # A precise 20 ms timer keeps the five countdown strikes aligned.
@@ -3776,6 +3782,8 @@ class TeacherTimer(QWidget):
                 self.progress_started = self.remaining > 0
                 if self.presentation is not None:
                     self.presentation.show_progress()
+            if self.settings.get("final_pips", False):
+                _synth_sound("Final pip")  # cached, no first-pip disk work
             self.deadline = time.monotonic() + self.remaining
             self.running = True
         self.refresh()
