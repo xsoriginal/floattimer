@@ -2747,13 +2747,13 @@ class FlexibleClockStack(QStackedWidget):
 class ConfettiSlip:
     """One paper slip with independently evolving position, air and orientation."""
 
-    def __init__(self, rng, x, y, vx, vy, delay, colour):
+    def __init__(self, rng, x, y, vx, vy, delay, colour, size_scale=1.0):
         self.x, self.y = x, y
         self.vx, self.vy = vx, vy
         self.delay = delay
         self.colour = QColor(colour)
-        self.width = rng.uniform(5.0, 10.0)
-        self.height = rng.uniform(3.0, 6.5)
+        self.width = rng.uniform(5.0, 10.0) * size_scale
+        self.height = rng.uniform(3.0, 6.5) * size_scale
         self.angle = rng.uniform(-32, 32)
         self.angular_velocity = rng.uniform(-14, 14)
         self.tilt_target = rng.uniform(-28, 28)
@@ -2890,8 +2890,11 @@ class RedConfetti(QWidget):
                 ox, oy, w, h = self.origin
                 x = ox + r.uniform(.12, .88) * w
                 y = oy + h - r.uniform(0, 8)
-                vx, vy = r.uniform(-80, 80), r.uniform(-20, 55)
-                delay = r.uniform(0, .75)
+                # A short, energetic downward fan from the underside.
+                # Existing aerodynamic drag quickly slows the launch,
+                # after which each slip resumes its natural fluttering fall.
+                vx, vy = r.uniform(-240, 240), r.uniform(190, 380)
+                delay = r.uniform(0, .24)
             elif mode == 'float':
                 ox, oy, w, h = self.origin
                 side = r.randrange(4)
@@ -2914,7 +2917,8 @@ class RedConfetti(QWidget):
                 vx, vy = r.uniform(-55, 55), r.uniform(15, 95)
                 delay = r.uniform(0, 1.7)
             self.pieces.append(ConfettiSlip(r, x, y, vx, vy, delay,
-                                            r.choice(palette)))
+                                            r.choice(palette),
+                                            size_scale=1.6 if mode == 'full' else 1.0))
         self.animation = QTimer(self)
         self.animation.setInterval(25)
         self.animation.timeout.connect(self.advance)
